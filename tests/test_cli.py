@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 class CliTest(unittest.TestCase):
     def test_build_blueprint_subcommand_writes_course_blueprint(self) -> None:
@@ -36,7 +38,7 @@ class CliTest(unittest.TestCase):
                     "--toc-file",
                     str(toc_file),
                 ],
-                cwd=r"C:\Users\ming\Documents\databaseleaning",
+                cwd=REPO_ROOT,
                 capture_output=True,
                 text=True,
             )
@@ -121,7 +123,7 @@ class CliTest(unittest.TestCase):
                     "--stub-scenario",
                     str(scenario_file),
                 ],
-                cwd=r"C:\Users\ming\Documents\databaseleaning",
+                cwd=REPO_ROOT,
                 capture_output=True,
                 text=True,
             )
