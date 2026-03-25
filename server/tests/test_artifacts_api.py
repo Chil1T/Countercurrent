@@ -91,6 +91,14 @@ class ArtifactsApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 404)
 
+    def test_artifact_content_hides_internal_llm_call_log_after_path_normalization(self) -> None:
+        response = self.client.get(
+            f"/courses/{self.course_id}/artifacts/content",
+            params={"path": "runtime/../runtime/llm_calls.jsonl"},
+        )
+
+        self.assertEqual(response.status_code, 404)
+
     def test_review_summary_accepts_structured_issue_objects(self) -> None:
         course_dir = self.output_root / "courses" / self.course_id
         (course_dir / "chapters" / "chapter-01" / "review_report.json").write_text(

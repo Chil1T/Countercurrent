@@ -35,14 +35,16 @@ class ArtifactService:
         return {"course_id": course_id, "nodes": nodes}
 
     def read_content(self, course_id: str, relative_path: str) -> dict[str, str] | None:
-        if not self._is_public_artifact(relative_path):
-            return None
+        course_dir = self._course_dir(course_id).resolve()
         path = self._safe_file_path(course_id, relative_path)
         if path is None or not path.exists() or path.is_dir():
             return None
+        normalized_relative = path.relative_to(course_dir).as_posix()
+        if not self._is_public_artifact(normalized_relative):
+            return None
 
         return {
-            "path": relative_path,
+            "path": normalized_relative,
             "kind": self._detect_kind(path),
             "content": path.read_text(encoding="utf-8"),
         }
