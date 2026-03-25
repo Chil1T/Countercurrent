@@ -1137,6 +1137,58 @@ class RunsApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "completed")
 
+    def test_get_run_marks_orphaned_running_run_failed_after_restart(self) -> None:
+        draft_payload = self.client.post(
+            "/course-drafts",
+            json={
+                "book_title": "Computer Networks",
+                "subtitle_text": "# 第1章 绪论\n\n本节介绍网络分层。",
+            },
+        ).json()
+        run_payload = self.client.post("/runs", json={"draft_id": draft_payload["id"]}).json()
+        run_id = run_payload["id"]
+
+        restarted_client = TestClient(
+            create_app(output_root=self.output_root, run_runner=StubRunner(), gui_config_path=self.gui_config_path)
+        )
+
+        response = restarted_client.get(f"/runs/{run_id}")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "failed")
+        self.assertIn("runner snapshot", payload["last_error"].lower())
+
+    def test_orphaned_running_run_does_not_block_new_run_for_same_course_after_restart(self) -> None:
+        first_draft = self.client.post(
+            "/course-drafts",
+            json={
+                "book_title": "Computer Networks",
+                "subtitle_text": "# 第1章 绪论\n\n本节介绍网络分层。",
+            },
+        ).json()
+        first_run = self.client.post("/runs", json={"draft_id": first_draft["id"]}).json()
+
+        second_draft = self.client.post(
+            "/course-drafts",
+            json={
+                "book_title": "Computer Networks",
+                "subtitle_text": "# 第2章 传输层\n\n本节介绍端到端通信。",
+            },
+        ).json()
+
+        restarted_runner = StubRunner()
+        restarted_client = TestClient(
+            create_app(output_root=self.output_root, run_runner=restarted_runner, gui_config_path=self.gui_config_path)
+        )
+
+        response = restarted_client.post("/runs", json={"draft_id": second_draft["id"]})
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(restarted_runner.started_specs[-1]["command"], "run-course")
+        orphaned = restarted_client.get(f"/runs/{first_run['id']}").json()
+        self.assertEqual(orphaned["status"], "failed")
+
     def test_concurrent_create_run_requests_allow_only_one_active_run_per_course(self) -> None:
         slow_runner = SlowStubRunner(delay_seconds=0.2)
         slow_client = TestClient(

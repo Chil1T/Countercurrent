@@ -203,11 +203,7 @@ class RunService:
         snapshot = self._runner.snapshot(run_id)
         runtime = self._runtime_reader.read(record.session.course_id)
         status = self._resolve_status(record=record, snapshot=snapshot, runtime=runtime)
-        snapshot_error = self._snapshot_value(snapshot, "last_error")
-        if status in {"running", "completed", "cleaned"} and snapshot_error is None:
-            last_error = None
-        else:
-            last_error = snapshot_error or (runtime.last_error if runtime else None)
+        last_error = self._fallback_last_error(record=record, status=status, snapshot=snapshot, runtime=runtime)
         stages = self._map_stages(
             runtime=runtime,
             run_status=status,
@@ -370,8 +366,23 @@ class RunService:
                 return "completed"
             if runtime is not None and runtime.last_error:
                 return "failed"
+            if record.session.status == "running":
+                return "failed"
             return record.session.status
         return runner_status
+
+    @staticmethod
+    def _fallback_last_error(record: _RunRecord, status: str, snapshot, runtime: RuntimeSnapshot | None) -> str | None:
+        if status != "failed":
+            return None
+        snapshot_error = RunService._snapshot_value(snapshot, "last_error")
+        if snapshot_error:
+            return snapshot_error
+        if runtime is not None and runtime.last_error:
+            return runtime.last_error
+        if record.session.status == "running":
+            return "Runner snapshot unavailable after service restart; previous run is treated as failed"
+        return None
 
     @staticmethod
     def _runtime_is_complete(

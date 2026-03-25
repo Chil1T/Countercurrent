@@ -201,6 +201,7 @@ out/courses/<course_id>/runtime/llm_calls.jsonl
 - hosted backend 优先记录 provider usage；如果 provider 不返回 usage，则回退为本地估算值
 - `RunService` 在后端重启后会优先从 `out/_gui/runs/<run_id>/session.json` 与 `process.log` 恢复历史日志，`/runs/{id}/log` 不再依赖 runner 进程内存快照
 - 对 `clean-course`，如果后端在清理过程中重启且 runner snapshot 丢失，`RunService` 会根据课程 runtime 目录是否仍存在来恢复 `cleaned` 终态，避免状态永久卡在 `running`
+- 对普通章节 run 或 `build-global`，如果服务重启后 runner snapshot 丢失、runtime 也尚未达到完成态且没有显式 `last_error`，`RunService` 会把该 run 判成失败并附带 orphaned-run 错误说明，避免旧的 `running` 记录永久占住同一个 `course_id`
 
 ## Provider Pressure And Concurrency
 
