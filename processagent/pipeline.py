@@ -816,18 +816,19 @@ class HeuristicLLMBackend:
         payload: dict[str, Any],
         model_override: str | None = None,
     ) -> str:
-        compose_pack = self._compose_pack(payload)
         if agent_name in PACK_WRITER_FILES:
+            compose_pack = self._compose_pack(payload)
             response = compose_pack["files"][PACK_WRITER_FILES[agent_name]]
             self._remember_call(payload, response, model_override)
             return response
 
-        canonicalized = self._canonicalize(payload)
         if agent_name == "build_global_glossary":
+            canonicalized = self._canonicalize(payload)
             response = canonicalized["global_glossary"]
             self._remember_call(payload, response, model_override)
             return response
         if agent_name == "build_interview_index":
+            canonicalized = self._canonicalize(payload)
             response = canonicalized["interview_index"]
             self._remember_call(payload, response, model_override)
             return response

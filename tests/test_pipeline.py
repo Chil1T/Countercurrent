@@ -802,6 +802,42 @@ class PipelineRunnerTest(unittest.TestCase):
             self.assertTrue((course_dir / "global" / "global_glossary.md").exists())
             self.assertTrue((course_dir / "global" / "interview_index.md").exists())
 
+    def test_manual_global_consolidation_with_heuristic_backend_writes_global_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "captions"
+            output_dir = root / "out"
+            blueprint = make_blueprint(target_output="standard_knowledge_pack")
+            course_dir = output_dir / "courses" / blueprint["course_id"]
+            chapter_dir = self._chapter_dir(output_dir, blueprint)
+            notebooklm_dir = chapter_dir / "notebooklm"
+            notebooklm_dir.mkdir(parents=True)
+            input_dir.mkdir()
+
+            course_dir.mkdir(parents=True, exist_ok=True)
+            (course_dir / "course_blueprint.json").write_text(
+                json.dumps(blueprint, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            (notebooklm_dir / "02-术语与定义.md").write_text("# 术语\n\n- DBMS\n", encoding="utf-8")
+            (notebooklm_dir / "03-面试问答.md").write_text("# 面试问答\n\n- 什么是 DBMS？\n", encoding="utf-8")
+            (notebooklm_dir / "04-跨章关联.md").write_text("# 跨章关联\n\n- 与后续章节关联。\n", encoding="utf-8")
+
+            runner = PipelineRunner(
+                config=PipelineConfig(
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    course_blueprint=blueprint,
+                    run_global_consolidation=True,
+                ),
+                llm_backend=HeuristicLLMBackend(),
+            )
+
+            runner.run()
+
+            self.assertTrue((course_dir / "global" / "global_glossary.md").exists())
+            self.assertTrue((course_dir / "global" / "interview_index.md").exists())
+
     def test_heuristic_compose_pack_respects_target_output_style(self) -> None:
         backend = HeuristicLLMBackend()
         payload = {
