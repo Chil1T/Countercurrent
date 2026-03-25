@@ -256,7 +256,7 @@ def create_backend(args: argparse.Namespace):
 
 
 def _resolve_course_dir(output_dir: Path, book_title: str) -> Path:
-    return output_dir / "courses" / build_course_id(book_title)
+    return output_dir / "courses" / build_course_id(book_title.strip())
 
 
 def _load_existing_course_blueprint(output_dir: Path, book_title: str) -> dict[str, Any]:

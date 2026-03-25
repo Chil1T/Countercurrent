@@ -884,6 +884,40 @@ class PipelineRunnerTest(unittest.TestCase):
                 json.dumps(blueprint, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+            (course_dir / "runtime_state.json").write_text(
+                json.dumps(
+                    {
+                        "course_id": blueprint["course_id"],
+                        "blueprint_hash": blueprint["blueprint_hash"],
+                        "provider": "stub",
+                        "default_model": "",
+                        "stage_models": {},
+                        "pipeline_signature": PIPELINE_SIGNATURE,
+                        "review_enabled": False,
+                        "review_mode": blueprint["policy"]["review_mode"],
+                        "target_output": blueprint["policy"]["target_output"],
+                        "run_identity": {
+                            "review_enabled": False,
+                            "review_mode": blueprint["policy"]["review_mode"],
+                            "target_output": blueprint["policy"]["target_output"],
+                        },
+                        "chapters": {
+                            fallback_chapter_id: {
+                                "steps": {
+                                    "write_terms": {},
+                                    "write_interview_qa": {},
+                                    "write_cross_links": {},
+                                }
+                            }
+                        },
+                        "global": {},
+                        "last_error": None,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
             (notebooklm_dir / "02-术语与定义.md").write_text("# 术语\n\n- WAL\n", encoding="utf-8")
             (notebooklm_dir / "03-面试问答.md").write_text("# 面试问答\n\n- 什么是 WAL？\n", encoding="utf-8")
             (notebooklm_dir / "04-跨章关联.md").write_text("# 跨章关联\n\n- 与日志恢复关联。\n", encoding="utf-8")
@@ -907,6 +941,91 @@ class PipelineRunnerTest(unittest.TestCase):
 
             runner.run()
 
+            self.assertTrue((course_dir / "global" / "global_glossary.md").exists())
+            self.assertTrue((course_dir / "global" / "interview_index.md").exists())
+
+    def test_manual_global_consolidation_excludes_stale_runtime_chapter_dirs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "captions"
+            output_dir = root / "out"
+            blueprint = make_blueprint(target_output="standard_knowledge_pack")
+            course_dir = output_dir / "courses" / blueprint["course_id"]
+            current_notebooklm_dir = self._chapter_dir(output_dir, blueprint) / "notebooklm"
+            stale_notebooklm_dir = course_dir / "chapters" / "旧版章节·已废弃" / "notebooklm"
+            input_dir.mkdir()
+            current_notebooklm_dir.mkdir(parents=True)
+            stale_notebooklm_dir.mkdir(parents=True)
+
+            runtime_state = {
+                "course_id": blueprint["course_id"],
+                "blueprint_hash": blueprint["blueprint_hash"],
+                "provider": "stub",
+                "default_model": "",
+                "stage_models": {},
+                "pipeline_signature": PIPELINE_SIGNATURE,
+                "review_enabled": False,
+                "review_mode": blueprint["policy"]["review_mode"],
+                "target_output": blueprint["policy"]["target_output"],
+                "run_identity": {
+                    "review_enabled": False,
+                    "review_mode": blueprint["policy"]["review_mode"],
+                    "target_output": blueprint["policy"]["target_output"],
+                },
+                "chapters": {
+                    "第一章·绪论": {
+                        "steps": {
+                            "write_terms": {},
+                            "write_interview_qa": {},
+                            "write_cross_links": {},
+                        }
+                    }
+                },
+                "global": {},
+                "last_error": None,
+            }
+
+            course_dir.mkdir(parents=True, exist_ok=True)
+            (course_dir / "course_blueprint.json").write_text(
+                json.dumps(blueprint, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            (course_dir / "runtime_state.json").write_text(
+                json.dumps(runtime_state, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+            (current_notebooklm_dir / "02-术语与定义.md").write_text("# 术语\n\n- DBMS\n", encoding="utf-8")
+            (current_notebooklm_dir / "03-面试问答.md").write_text("# 面试问答\n\n- 什么是 DBMS？\n", encoding="utf-8")
+            (current_notebooklm_dir / "04-跨章关联.md").write_text("# 跨章关联\n\n- 与后续章节关联。\n", encoding="utf-8")
+
+            (stale_notebooklm_dir / "02-术语与定义.md").write_text("# 术语\n\n- STALE\n", encoding="utf-8")
+            (stale_notebooklm_dir / "03-面试问答.md").write_text("# 面试问答\n\n- 什么是 STALE？\n", encoding="utf-8")
+            (stale_notebooklm_dir / "04-跨章关联.md").write_text("# 跨章关联\n\n- 这是旧章节。\n", encoding="utf-8")
+
+            backend = StubLLMBackend(
+                responses={
+                    "build_global_glossary": "# 全书术语表\n\n## 第一章·绪论\n- DBMS\n",
+                    "build_interview_index": "# 面试索引\n\n## 第一章·绪论\n- 什么是 DBMS？\n",
+                }
+            )
+
+            runner = PipelineRunner(
+                config=PipelineConfig(
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    course_blueprint=blueprint,
+                    run_global_consolidation=True,
+                ),
+                llm_backend=backend,
+            )
+
+            runner.run()
+
+            global_calls = [item for item in (backend.calls or []) if item["agent_name"] == "build_global_glossary"]
+            self.assertEqual(len(global_calls), 1)
+            chapters_payload = global_calls[0]["payload"]["chapters"]
+            self.assertEqual([chapter["chapter_id"] for chapter in chapters_payload], ["第一章·绪论"])
             self.assertTrue((course_dir / "global" / "global_glossary.md").exists())
             self.assertTrue((course_dir / "global" / "interview_index.md").exists())
 

@@ -17,6 +17,7 @@ python -m processagent.cli run-course `
 - 仅当显式传 `--clean` 时清理该课程 runtime
 - GUI 配置页的“启动 / 继续运行”就是这套语义，不表示总是 fresh run
 - `resume-course` 会继续同一个课程目录下已存在的 runtime，并从 `runtime_state.json` 的 `run_identity` 恢复冻结的流水线身份
+- 课程目录解析会先规范化 `book_title`（去掉前后空格）再生成 `course_id`；`build-global` / `resume-course` / `show-status` / `clean-course` 都按这条规则查已有课程
 - 恢复时允许刷新：
   - `provider/backend`
   - `base_url`
@@ -74,6 +75,7 @@ GUI 侧在进入 CLI 前还会先做一层解析：
 - `review` 当前默认关闭；只有显式传 `--enable-review` 时才会执行 reviewer
 - `quarantine` 机制已移除；章节产物始终保留在 `chapters/` 下
 - `global/*` 当前不是章节主流程的一部分；只通过 `build-global` 手动触发
+- `build-global` 汇总章节时，优先以当前 `runtime_state.json` 里的章节 scope 作为输入集合；旧 run 遗留但不在当前 runtime scope 里的章节目录不会再混入全局术语表或面试索引
 - 对同一个 `course_id`，当前 orchestration 只允许一个活跃 run；无论章节主流程还是 `build-global`，如果已有 `running` run 占用同一课程输出目录，就应先拒绝新 run，避免并发写坏 `runtime_state.json` 和 checkpoint
 - GUI 当前只把两类配置接入 runtime：
   - `provider/backend`

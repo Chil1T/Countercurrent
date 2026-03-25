@@ -539,6 +539,103 @@ class CliTest(unittest.TestCase):
             self.assertTrue((course_dir / "global" / "global_glossary.md").exists())
             self.assertTrue((course_dir / "global" / "interview_index.md").exists())
 
+    def test_build_global_subcommand_normalizes_book_title_for_existing_course_lookup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "generated"
+            course_dir = output_dir / "courses" / build_course_id("数据库系统概论")
+            chapter_dir = course_dir / "chapters" / "第一章·绪论" / "notebooklm"
+            scenario_file = root / "scenario.json"
+
+            chapter_dir.mkdir(parents=True)
+            (course_dir / "course_blueprint.json").write_text(
+                json.dumps(
+                    {
+                        "course_id": build_course_id("数据库系统概论"),
+                        "course_name": "数据库系统概论",
+                        "chapters": [{"chapter_id": "第一章·绪论", "title": "绪论"}],
+                        "policy": {"target_output": "interview_knowledge_base", "review_mode": "light"},
+                        "blueprint_hash": "hash",
+                        "source_type": "published_textbook",
+                        "book": {"title": "数据库系统概论"},
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (course_dir / "runtime_state.json").write_text(
+                json.dumps(
+                    {
+                        "course_id": build_course_id("数据库系统概论"),
+                        "blueprint_hash": "hash",
+                        "provider": "stub",
+                        "default_model": "",
+                        "stage_models": {},
+                        "pipeline_signature": "test",
+                        "review_enabled": False,
+                        "review_mode": "light",
+                        "target_output": "interview_knowledge_base",
+                        "run_identity": {
+                            "review_enabled": False,
+                            "review_mode": "light",
+                            "target_output": "interview_knowledge_base",
+                        },
+                        "chapters": {
+                            "第一章·绪论": {
+                                "steps": {
+                                    "write_terms": {},
+                                    "write_interview_qa": {},
+                                    "write_cross_links": {},
+                                }
+                            }
+                        },
+                        "global": {},
+                        "last_error": None,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (chapter_dir / "02-术语与定义.md").write_text("# 术语\n\n- DBMS\n", encoding="utf-8")
+            (chapter_dir / "03-面试问答.md").write_text("# 面试问答\n\n- 什么是 DBMS？\n", encoding="utf-8")
+            (chapter_dir / "04-跨章关联.md").write_text("# 跨章关联\n\n- 与后续章节关联。\n", encoding="utf-8")
+            scenario_file.write_text(
+                json.dumps(
+                    {
+                        "build_global_glossary": "# glossary\n",
+                        "build_interview_index": "# index\n",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "processagent.cli",
+                    "build-global",
+                    "--book-title",
+                    "  数据库系统概论  ",
+                    "--output-dir",
+                    str(output_dir),
+                    "--backend",
+                    "stub",
+                    "--stub-scenario",
+                    str(scenario_file),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            self.assertTrue((course_dir / "global" / "global_glossary.md").exists())
+            self.assertTrue((course_dir / "global" / "interview_index.md").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
