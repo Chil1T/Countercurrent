@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from .blueprint import build_course_id, load_blueprint, save_blueprint
+from .blueprint import apply_policy_overrides, build_course_id, load_blueprint, save_blueprint
 from .bootstrap import bootstrap_course_blueprint, describe_source, load_toc_text, write_json
 from .llm import AnthropicMessagesBackend, OpenAICompatibleResponsesBackend, OpenAIResponsesBackend
 from .pipeline import HeuristicLLMBackend, PipelineConfig, PipelineRunner
@@ -18,9 +18,15 @@ STAGE_MODEL_SPECS = {
     "blueprint_builder": "MODEL_BLUEPRINT_BUILDER",
     "curriculum_anchor": "MODEL_CURRICULUM_ANCHOR",
     "gap_fill": "MODEL_GAP_FILL",
-    "compose_pack": "MODEL_COMPOSE_PACK",
+    "pack_plan": "MODEL_COMPOSE_PACK",
+    "write_lecture_note": "MODEL_COMPOSE_PACK",
+    "write_terms": "MODEL_COMPOSE_PACK",
+    "write_interview_qa": "MODEL_COMPOSE_PACK",
+    "write_cross_links": "MODEL_COMPOSE_PACK",
+    "write_open_questions": "MODEL_COMPOSE_PACK",
     "review": "MODEL_REVIEW",
-    "canonicalize": "MODEL_CANONICALIZE",
+    "build_global_glossary": "MODEL_CANONICALIZE",
+    "build_interview_index": "MODEL_CANONICALIZE",
 }
 
 
@@ -38,6 +44,10 @@ def build_parser() -> argparse.ArgumentParser:
     source_parent.add_argument("--edition", default=None, help="Optional textbook edition.")
     source_parent.add_argument("--publisher", default=None, help="Optional publisher.")
     source_parent.add_argument("--isbn", default=None, help="Optional ISBN.")
+
+    course_parent = argparse.ArgumentParser(add_help=False)
+    course_parent.add_argument("--output-dir", required=True, type=Path, help="Directory where generated runtime artifacts are written.")
+    course_parent.add_argument("--book-title", required=True, help="Published textbook title used to resolve the existing course runtime.")
 
     backend_parent = argparse.ArgumentParser(add_help=False)
     backend_parent.add_argument(
@@ -77,6 +87,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Build or refresh blueprint, then run the course pipeline.",
     )
     run_course.add_argument("--clean", action="store_true", help="Delete the existing runtime for this course before running.")
+    run_course.add_argument("--review-mode", choices=("light", "standard", "strict"), default=None, help="Optional override for blueprint policy.review_mode.")
+    run_course.add_argument("--target-output", default=None, help="Optional override for blueprint policy.target_output.")
+    run_course.add_argument("--enable-review", action="store_true", help="Run the optional reviewer stage for this invocation.")
     run_course.set_defaults(handler=handle_run_course)
 
     resume_course = subparsers.add_parser(
@@ -84,7 +97,14 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[source_parent, backend_parent],
         help="Resume the course pipeline from valid checkpoints.",
     )
-    resume_course.set_defaults(handler=handle_run_course)
+    resume_course.set_defaults(handler=handle_resume_course)
+
+    build_global = subparsers.add_parser(
+        "build-global",
+        parents=[course_parent, backend_parent],
+        help="Rebuild global consolidation outputs from existing approved chapter artifacts.",
+    )
+    build_global.set_defaults(handler=handle_build_global)
 
     inspect_source = subparsers.add_parser(
         "inspect-source",
@@ -190,9 +210,20 @@ def resolve_stage_models(args: argparse.Namespace) -> dict[str, str]:
         "anthropic": "ANTHROPIC_MODEL",
     }.get(getattr(args, "backend", ""), "")
     provider_default = os.environ.get(provider_env_key) or getattr(args, "model", None)
+    legacy_cli_mapping = {
+        "pack_plan": "compose_pack_model",
+        "write_lecture_note": "compose_pack_model",
+        "write_terms": "compose_pack_model",
+        "write_interview_qa": "compose_pack_model",
+        "write_cross_links": "compose_pack_model",
+        "write_open_questions": "compose_pack_model",
+        "build_global_glossary": "canonicalize_model",
+        "build_interview_index": "canonicalize_model",
+    }
     resolved: dict[str, str] = {}
     for stage_name, env_key in STAGE_MODEL_SPECS.items():
-        cli_value = getattr(args, f"{stage_name.replace('_', '_')}_model", None)
+        cli_attr = legacy_cli_mapping.get(stage_name, f"{stage_name}_model")
+        cli_value = getattr(args, cli_attr, None)
         model = cli_value or os.environ.get(env_key) or provider_default
         if model:
             resolved[stage_name] = model
@@ -228,6 +259,22 @@ def _resolve_course_dir(output_dir: Path, book_title: str) -> Path:
     return output_dir / "courses" / build_course_id(book_title)
 
 
+def _load_existing_course_blueprint(output_dir: Path, book_title: str) -> dict[str, Any]:
+    course_dir = _resolve_course_dir(output_dir, book_title)
+    blueprint_path = course_dir / "course_blueprint.json"
+    if not blueprint_path.exists():
+        raise SystemExit(f"course_blueprint.json not found for course: {book_title}")
+    return load_blueprint(blueprint_path)
+
+
+def _load_existing_runtime_state(output_dir: Path, book_title: str) -> dict[str, Any]:
+    course_dir = _resolve_course_dir(output_dir, book_title)
+    runtime_state_path = course_dir / "runtime_state.json"
+    if not runtime_state_path.exists():
+        raise SystemExit(f"runtime_state.json not found for course: {book_title}")
+    return json.loads(runtime_state_path.read_text(encoding="utf-8"))
+
+
 def _build_blueprint(args: argparse.Namespace, backend: Any | None) -> dict[str, Any]:
     toc_text = load_toc_text(args.toc_file, args.toc_text)
     llm_backend = backend if toc_text is None else None
@@ -255,6 +302,11 @@ def handle_build_blueprint(args: argparse.Namespace) -> int:
 def handle_run_course(args: argparse.Namespace) -> int:
     backend = create_backend(args)
     blueprint = _build_blueprint(args, backend)
+    blueprint = apply_policy_overrides(
+        blueprint,
+        review_mode=getattr(args, "review_mode", None),
+        target_output=getattr(args, "target_output", None),
+    )
     runner = PipelineRunner(
         config=PipelineConfig(
             input_dir=args.input_dir,
@@ -264,6 +316,52 @@ def handle_run_course(args: argparse.Namespace) -> int:
             course_blueprint=blueprint,
             stage_models=resolve_stage_models(args),
             backend_name=args.backend,
+            enable_review=getattr(args, "enable_review", False),
+        ),
+        llm_backend=backend,
+    )
+    runner.run()
+    return 0
+
+
+def handle_resume_course(args: argparse.Namespace) -> int:
+    backend = create_backend(args)
+    blueprint = _load_existing_course_blueprint(args.output_dir, args.book_title)
+    runtime_state = _load_existing_runtime_state(args.output_dir, args.book_title)
+    run_identity = runtime_state.get("run_identity", {})
+    blueprint = apply_policy_overrides(
+        blueprint,
+        review_mode=run_identity.get("review_mode"),
+        target_output=run_identity.get("target_output"),
+    )
+    runner = PipelineRunner(
+        config=PipelineConfig(
+            input_dir=args.input_dir,
+            output_dir=args.output_dir,
+            model=getattr(backend, "model", ""),
+            course_blueprint=blueprint,
+            stage_models=resolve_stage_models(args),
+            backend_name=args.backend,
+            enable_review=bool(run_identity.get("review_enabled", False)),
+        ),
+        llm_backend=backend,
+    )
+    runner.run()
+    return 0
+
+
+def handle_build_global(args: argparse.Namespace) -> int:
+    backend = create_backend(args)
+    blueprint = _load_existing_course_blueprint(args.output_dir, args.book_title)
+    runner = PipelineRunner(
+        config=PipelineConfig(
+            input_dir=args.output_dir,
+            output_dir=args.output_dir,
+            model=getattr(backend, "model", ""),
+            course_blueprint=blueprint,
+            stage_models=resolve_stage_models(args),
+            backend_name=args.backend,
+            run_global_consolidation=True,
         ),
         llm_backend=backend,
     )

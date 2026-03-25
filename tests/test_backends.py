@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import unittest
 
@@ -197,7 +198,9 @@ class BackendFactoryTest(unittest.TestCase):
             else:
                 os.environ["OPENAI_COMPATIBLE_MODEL"] = original_default
 
-        self.assertEqual(models["compose_pack"], "openai/gpt-5.4")
+        self.assertEqual(models["pack_plan"], "openai/gpt-5.4")
+        self.assertEqual(models["write_interview_qa"], "openai/gpt-5.4")
+        self.assertEqual(models["build_global_glossary"], "openai/gpt-4.1-mini")
         self.assertEqual(models["curriculum_anchor"], "openai/gpt-4.1-mini")
 
 
@@ -238,6 +241,27 @@ class OpenAICompatibleBackendTest(unittest.TestCase):
 
         self.assertEqual(text, "{\"status\":\"ok\"}")
 
+    def test_build_text_request_body_omits_json_response_format(self) -> None:
+        backend = OpenAICompatibleResponsesBackend(
+            model="openrouter/auto",
+            base_url="https://api.ohmygpt.com/v1/chat/completions",
+        )
+
+        body = backend._build_text_request_body("Write markdown only.", {"chapter": "绪论"})
+
+        self.assertNotIn("response_format", body)
+        self.assertEqual(body["messages"][0]["content"], "Write markdown only.")
+
+    def test_build_json_request_body_injects_json_hint_when_missing(self) -> None:
+        backend = OpenAICompatibleResponsesBackend(
+            model="openrouter/auto",
+            base_url="https://api.ohmygpt.com/v1/chat/completions",
+        )
+
+        body = backend._build_request_body("Only return the object.", {"chapter": "绪论"})
+
+        self.assertIn("json", body["messages"][0]["content"].lower())
+
     def test_build_request_body_uses_chat_completions_schema_when_needed(self) -> None:
         backend = OpenAICompatibleResponsesBackend(
             model="openrouter/auto",
@@ -248,6 +272,7 @@ class OpenAICompatibleBackendTest(unittest.TestCase):
 
         self.assertIn("messages", body)
         self.assertNotIn("input", body)
+        self.assertEqual(body["response_format"], {"type": "json_object"})
 
 
 class JsonParsingTest(unittest.TestCase):
@@ -258,6 +283,10 @@ class JsonParsingTest(unittest.TestCase):
     def test_parse_json_text_extracts_first_json_object_from_mixed_text(self) -> None:
         data = parse_json_text('Here is the result:\n{"ok": true}\nDone.')
         self.assertEqual(data, {"ok": True})
+
+    def test_parse_json_text_reports_blank_output_clearly(self) -> None:
+        with self.assertRaisesRegex(json.JSONDecodeError, "blank model output"):
+            parse_json_text("   \n\t")
 
 
 if __name__ == "__main__":

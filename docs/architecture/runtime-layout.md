@@ -24,8 +24,8 @@ out/
       global/
         global_glossary.md
         interview_index.md
-      quarantine/
-        <chapter_id>/
+      runtime/
+        llm_calls.jsonl
 ```
 
 ## Checkpoint Rules
@@ -35,6 +35,8 @@ out/
 - 当 `blueprint_hash` 不一致时，下游 step 自动失效
 - 默认 `resume`
 - 显式 `clean-course` 或 `--clean` 才删除运行时产物
+- `global/*` 仅在手动 `build-global` 时重建
+- `review` 当前是可选步骤，不再驱动章节隔离
 
 ## Runtime State
 
@@ -46,5 +48,6 @@ out/
 - `default_model`
 - `stage_models`
 - `chapters.<chapter_id>.steps.*`
-- `global.canonicalize`
+- `global.build_global_glossary`
+- `global.build_interview_index`
 - `last_error`

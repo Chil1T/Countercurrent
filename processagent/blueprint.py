@@ -51,6 +51,23 @@ def finalize_blueprint(blueprint: dict[str, Any]) -> dict[str, Any]:
     return materialized
 
 
+def apply_policy_overrides(
+    blueprint: dict[str, Any],
+    *,
+    review_mode: str | None = None,
+    target_output: str | None = None,
+) -> dict[str, Any]:
+    materialized = deepcopy(blueprint)
+    policy = deepcopy(materialized.get("policy", {}))
+    if review_mode:
+        policy["review_mode"] = review_mode
+    if target_output:
+        policy["target_output"] = target_output
+    materialized["policy"] = policy
+    materialized["blueprint_hash"] = build_blueprint_hash(materialized)
+    return materialized
+
+
 def load_blueprint(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 

@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 
@@ -19,9 +20,20 @@ class LLMBackend(Protocol):
     ) -> dict[str, Any]:
         ...
 
+    def generate_text(
+        self,
+        agent_name: str,
+        prompt: str,
+        payload: dict[str, Any],
+        model_override: str | None = None,
+    ) -> str:
+        ...
+
 
 def parse_json_text(text: str) -> dict[str, Any]:
     stripped = text.strip()
+    if not stripped:
+        raise json.JSONDecodeError("Could not extract a JSON object from blank model output", stripped, 0)
     try:
         return json.loads(stripped)
     except json.JSONDecodeError:
@@ -48,6 +60,7 @@ def parse_json_text(text: str) -> dict[str, Any]:
 @dataclass
 class HttpJsonBackend:
     timeout_seconds: int = 120
+    _last_call_metadata: dict[str, Any] | None = field(default=None, init=False, repr=False)
 
     def _post_json(self, url: str, body: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
         request = urllib.request.Request(
@@ -63,9 +76,48 @@ class HttpJsonBackend:
             detail = error.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"LLM request failed: {error.code} {detail}") from error
 
+    def consume_last_call_metadata(self) -> dict[str, Any] | None:
+        metadata = self._last_call_metadata
+        self._last_call_metadata = None
+        return metadata
+
+    def _usage_from_response(self, response_json: dict[str, Any]) -> tuple[int | None, int | None]:
+        usage = response_json.get("usage", {})
+        input_tokens = usage.get("input_tokens")
+        output_tokens = usage.get("output_tokens")
+        if input_tokens is None:
+            input_tokens = usage.get("prompt_tokens")
+        if output_tokens is None:
+            output_tokens = usage.get("completion_tokens")
+        return input_tokens, output_tokens
+
+    def _store_last_call_metadata(
+        self,
+        *,
+        provider: str,
+        model: str | None,
+        response_json: dict[str, Any] | None,
+        duration_ms: int,
+        status: str,
+        error: str | None = None,
+    ) -> None:
+        input_tokens, output_tokens = (None, None)
+        if response_json is not None:
+            input_tokens, output_tokens = self._usage_from_response(response_json)
+        self._last_call_metadata = {
+            "provider": provider,
+            "model": model,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "duration_ms": duration_ms,
+            "status": status,
+            "error": error,
+        }
+
 
 @dataclass
 class OpenAIResponsesBackend(HttpJsonBackend):
+    provider_name: str = "openai"
     model: str = "gpt-5.4-mini"
     api_key_env: str = "OPENAI_API_KEY"
     base_url: str = "https://api.openai.com/v1/responses"
@@ -86,16 +138,83 @@ class OpenAIResponsesBackend(HttpJsonBackend):
             )
 
         request_body = self._build_request_body(prompt, payload, model_override=model_override)
-        raw = self._post_json(
-            self.base_url,
-            request_body,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
+        started_at = time.perf_counter()
+        response_json: dict[str, Any] | None = None
+        try:
+            response_json = self._post_json(
+                self.base_url,
+                request_body,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+            text = self._extract_text(response_json)
+            parsed = parse_json_text(text)
+        except Exception as error:
+            self._store_last_call_metadata(
+                provider=self.provider_name,
+                model=model_override or self.model,
+                response_json=response_json,
+                duration_ms=int((time.perf_counter() - started_at) * 1000),
+                status="error",
+                error=str(error),
+            )
+            raise
+        self._store_last_call_metadata(
+            provider=self.provider_name,
+            model=model_override or self.model,
+            response_json=response_json,
+            duration_ms=int((time.perf_counter() - started_at) * 1000),
+            status="completed",
         )
-        text = self._extract_text(raw)
-        return parse_json_text(text)
+        return parsed
+
+    def generate_text(
+        self,
+        agent_name: str,
+        prompt: str,
+        payload: dict[str, Any],
+        model_override: str | None = None,
+    ) -> str:
+        api_key = os.environ.get(self.api_key_env)
+        if not api_key:
+            raise RuntimeError(
+                f"{self.api_key_env} is required for the openai backend. "
+                "Use --backend heuristic or --backend stub for offline runs."
+            )
+
+        request_body = self._build_text_request_body(prompt, payload, model_override=model_override)
+        started_at = time.perf_counter()
+        response_json: dict[str, Any] | None = None
+        try:
+            response_json = self._post_json(
+                self.base_url,
+                request_body,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+            text = self._extract_text(response_json).strip()
+        except Exception as error:
+            self._store_last_call_metadata(
+                provider=self.provider_name,
+                model=model_override or self.model,
+                response_json=response_json,
+                duration_ms=int((time.perf_counter() - started_at) * 1000),
+                status="error",
+                error=str(error),
+            )
+            raise
+        self._store_last_call_metadata(
+            provider=self.provider_name,
+            model=model_override or self.model,
+            response_json=response_json,
+            duration_ms=int((time.perf_counter() - started_at) * 1000),
+            status="completed",
+        )
+        return text
 
     def _build_request_body(
         self,
@@ -117,6 +236,14 @@ class OpenAIResponsesBackend(HttpJsonBackend):
             ],
         }
 
+    def _build_text_request_body(
+        self,
+        prompt: str,
+        payload: dict[str, Any],
+        model_override: str | None = None,
+    ) -> dict[str, Any]:
+        return self._build_request_body(prompt, payload, model_override=model_override)
+
     def _extract_text(self, response_json: dict[str, Any]) -> str:
         if isinstance(response_json.get("output_text"), str):
             return response_json["output_text"]
@@ -135,6 +262,7 @@ class OpenAIResponsesBackend(HttpJsonBackend):
 
 @dataclass
 class OpenAICompatibleResponsesBackend(OpenAIResponsesBackend):
+    provider_name: str = "openai_compatible"
     model: str = "openai/gpt-4.1-mini"
     api_key_env: str = "OPENAI_COMPATIBLE_API_KEY"
     base_url: str = "https://openrouter.ai/api/v1/chat/completions"
@@ -156,6 +284,29 @@ class OpenAICompatibleResponsesBackend(OpenAIResponsesBackend):
             "messages": [
                 {
                     "role": "system",
+                    "content": self._ensure_json_instruction(prompt),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(payload, ensure_ascii=False),
+                },
+            ],
+            "response_format": {"type": "json_object"},
+        }
+
+    def _build_text_request_body(
+        self,
+        prompt: str,
+        payload: dict[str, Any],
+        model_override: str | None = None,
+    ) -> dict[str, Any]:
+        if not self._uses_chat_completions():
+            return super()._build_text_request_body(prompt, payload, model_override=model_override)
+        return {
+            "model": model_override or self.model,
+            "messages": [
+                {
+                    "role": "system",
                     "content": prompt,
                 },
                 {
@@ -164,6 +315,12 @@ class OpenAICompatibleResponsesBackend(OpenAIResponsesBackend):
                 },
             ],
         }
+
+    @staticmethod
+    def _ensure_json_instruction(prompt: str) -> str:
+        if "json" in prompt.lower():
+            return prompt
+        return f"{prompt}\n\nReturn a JSON object."
 
     def _extract_text(self, response_json: dict[str, Any]) -> str:
         if not self._uses_chat_completions():
@@ -219,17 +376,95 @@ class AnthropicMessagesBackend(HttpJsonBackend):
                 }
             ],
         }
-        raw = self._post_json(
-            self.base_url,
-            request_body,
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": self.anthropic_version,
-                "Content-Type": "application/json",
-            },
+        started_at = time.perf_counter()
+        response_json: dict[str, Any] | None = None
+        try:
+            response_json = self._post_json(
+                self.base_url,
+                request_body,
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": self.anthropic_version,
+                    "Content-Type": "application/json",
+                },
+            )
+            text = self._extract_text(response_json)
+            parsed = parse_json_text(text)
+        except Exception as error:
+            self._store_last_call_metadata(
+                provider="anthropic",
+                model=model_override or self.model,
+                response_json=response_json,
+                duration_ms=int((time.perf_counter() - started_at) * 1000),
+                status="error",
+                error=str(error),
+            )
+            raise
+        self._store_last_call_metadata(
+            provider="anthropic",
+            model=model_override or self.model,
+            response_json=response_json,
+            duration_ms=int((time.perf_counter() - started_at) * 1000),
+            status="completed",
         )
-        text = self._extract_text(raw)
-        return parse_json_text(text)
+        return parsed
+
+    def generate_text(
+        self,
+        agent_name: str,
+        prompt: str,
+        payload: dict[str, Any],
+        model_override: str | None = None,
+    ) -> str:
+        api_key = os.environ.get(self.api_key_env)
+        if not api_key:
+            raise RuntimeError(
+                f"{self.api_key_env} is required for the anthropic backend. "
+                "Use --backend heuristic or --backend stub for offline runs."
+            )
+
+        request_body = {
+            "model": model_override or self.model,
+            "max_tokens": self.max_tokens,
+            "system": prompt,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": json.dumps(payload, ensure_ascii=False),
+                }
+            ],
+        }
+        started_at = time.perf_counter()
+        response_json: dict[str, Any] | None = None
+        try:
+            response_json = self._post_json(
+                self.base_url,
+                request_body,
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": self.anthropic_version,
+                    "Content-Type": "application/json",
+                },
+            )
+            text = self._extract_text(response_json).strip()
+        except Exception as error:
+            self._store_last_call_metadata(
+                provider="anthropic",
+                model=model_override or self.model,
+                response_json=response_json,
+                duration_ms=int((time.perf_counter() - started_at) * 1000),
+                status="error",
+                error=str(error),
+            )
+            raise
+        self._store_last_call_metadata(
+            provider="anthropic",
+            model=model_override or self.model,
+            response_json=response_json,
+            duration_ms=int((time.perf_counter() - started_at) * 1000),
+            status="completed",
+        )
+        return text
 
     def _extract_text(self, response_json: dict[str, Any]) -> str:
         texts: list[str] = []

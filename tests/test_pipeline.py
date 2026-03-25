@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from processagent.blueprint import finalize_blueprint
-from processagent.pipeline import PipelineConfig, PipelineRunner
+from processagent.pipeline import EXECUTION_STRATEGY, HOSTED_PRESSURE_STAGES, PIPELINE_SIGNATURE, HeuristicLLMBackend, PipelineConfig, PipelineRunner
 from processagent.testing import StubLLMBackend
 
 
@@ -42,6 +42,31 @@ def make_blueprint(*, review_mode: str = "light", target_output: str = "intervie
 
 
 class PipelineRunnerTest(unittest.TestCase):
+    def test_pipeline_declares_current_hosted_pressure_points_and_serial_execution(self) -> None:
+        self.assertEqual(
+            HOSTED_PRESSURE_STAGES,
+            (
+                "curriculum_anchor",
+                "gap_fill",
+                "pack_plan",
+                "write_lecture_note",
+                "write_terms",
+                "write_interview_qa",
+                "write_cross_links",
+                "review",
+                "build_global_glossary",
+                "build_interview_index",
+            ),
+        )
+        self.assertEqual(
+            EXECUTION_STRATEGY,
+            {
+                "chapter_loop": "serial",
+                "writer_loop": "serial",
+                "global_consolidation": "serial",
+            },
+        )
+
     def _chapter_dir(self, output_dir: Path, blueprint: dict) -> Path:
         return output_dir / "courses" / blueprint["course_id"] / "chapters" / "第一章·绪论"
 
@@ -103,13 +128,71 @@ class PipelineRunnerTest(unittest.TestCase):
             self.assertTrue((chapter_dir / "intermediate" / "normalized_transcript.json").exists())
             self.assertTrue((chapter_dir / "intermediate" / "topic_anchor_map.json").exists())
             self.assertTrue((chapter_dir / "intermediate" / "augmentation_candidates.json").exists())
-            self.assertTrue((chapter_dir / "review_report.json").exists())
+            self.assertFalse((chapter_dir / "review_report.json").exists())
             self.assertTrue((chapter_dir / "notebooklm" / "01-精讲.md").exists())
-            self.assertTrue((course_dir / "global" / "global_glossary.md").exists())
+            self.assertFalse((course_dir / "global" / "global_glossary.md").exists())
 
             runtime_state = json.loads((course_dir / "runtime_state.json").read_text(encoding="utf-8"))
             self.assertEqual(runtime_state["blueprint_hash"], blueprint["blueprint_hash"])
-            self.assertEqual(runtime_state["chapters"]["第一章·绪论"]["steps"]["compose_pack"]["status"], "completed")
+            self.assertEqual(runtime_state["chapters"]["第一章·绪论"]["steps"]["pack_plan"]["status"], "completed")
+            self.assertNotIn("write_open_questions", runtime_state["chapters"]["第一章·绪论"]["steps"])
+            self.assertEqual(runtime_state["global"], {})
+
+    def test_run_writes_per_call_llm_accountability_log(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "captions"
+            output_dir = root / "out"
+            blueprint = make_blueprint()
+            input_dir.mkdir()
+            (input_dir / "第一章·绪论.md").write_text(
+                "第一章 数据库发展经历人工管理、文件系统和数据库系统阶段。",
+                encoding="utf-8",
+            )
+            backend = StubLLMBackend(
+                responses={
+                    "curriculum_anchor": {
+                        "chapter_summary": "标准数据库系统概论主题映射",
+                        "anchors": [],
+                    },
+                    "gap_fill": {"candidates": []},
+                    "compose_pack": {
+                        "files": {
+                            "01-精讲.md": "# 精讲\n",
+                            "02-术语与定义.md": "# 术语\n",
+                            "03-面试问答.md": "# 面试问答\n",
+                            "04-跨章关联.md": "# 跨章关联\n",
+                            "05-疑点与待核.md": "# 疑点与待核\n",
+                        }
+                    },
+                }
+            )
+            runner = PipelineRunner(
+                config=PipelineConfig(input_dir=input_dir, output_dir=output_dir, course_blueprint=blueprint),
+                llm_backend=backend,
+            )
+
+            runner.run()
+
+            log_path = output_dir / "courses" / blueprint["course_id"] / "runtime" / "llm_calls.jsonl"
+            self.assertTrue(log_path.exists())
+            entries = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertEqual(
+                [entry["stage"] for entry in entries],
+                [
+                    "curriculum_anchor",
+                    "gap_fill",
+                    "pack_plan",
+                    "write_lecture_note",
+                    "write_terms",
+                    "write_interview_qa",
+                    "write_cross_links",
+                ],
+            )
+            self.assertTrue(all(entry["provider"] == "stub" for entry in entries))
+            self.assertTrue(all(entry["scope"] == "第一章·绪论" for entry in entries))
+            self.assertTrue(all(entry["input_tokens"] > 0 for entry in entries))
+            self.assertTrue(all(entry["output_tokens"] > 0 for entry in entries))
 
     def test_run_resumes_from_existing_intermediate_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -166,16 +249,18 @@ class PipelineRunnerTest(unittest.TestCase):
                         "chapters": {
                             "第一章·绪论": {
                                 "steps": {
-                                    "ingest": {"status": "completed", "updated_at": "t", "blueprint_hash": None},
+                                    "ingest": {"status": "completed", "updated_at": "t", "blueprint_hash": None, "pipeline_signature": PIPELINE_SIGNATURE},
                                     "curriculum_anchor": {
                                         "status": "completed",
                                         "updated_at": "t",
                                         "blueprint_hash": blueprint["blueprint_hash"],
+                                        "pipeline_signature": PIPELINE_SIGNATURE,
                                     },
                                     "gap_fill": {
                                         "status": "completed",
                                         "updated_at": "t",
                                         "blueprint_hash": blueprint["blueprint_hash"],
+                                        "pipeline_signature": PIPELINE_SIGNATURE,
                                     },
                                 }
                             }
@@ -214,9 +299,10 @@ class PipelineRunnerTest(unittest.TestCase):
             called_agents = [item["agent_name"] for item in backend.calls or []]
             self.assertNotIn("curriculum_anchor", called_agents)
             self.assertNotIn("gap_fill", called_agents)
-            self.assertIn("compose_pack", called_agents)
+            self.assertIn("pack_plan", called_agents)
+            self.assertIn("write_lecture_note", called_agents)
             self.assertTrue((notebooklm_dir / "01-精讲.md").exists())
-            self.assertTrue((chapter_dir / "review_report.json").exists())
+            self.assertFalse((chapter_dir / "review_report.json").exists())
 
     def test_blueprint_hash_change_invalidates_downstream_steps(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -265,21 +351,24 @@ class PipelineRunnerTest(unittest.TestCase):
                         "chapters": {
                             "第一章·绪论": {
                                 "steps": {
-                                    "ingest": {"status": "completed", "updated_at": "t", "blueprint_hash": None},
+                                    "ingest": {"status": "completed", "updated_at": "t", "blueprint_hash": None, "pipeline_signature": PIPELINE_SIGNATURE},
                                     "curriculum_anchor": {
                                         "status": "completed",
                                         "updated_at": "t",
                                         "blueprint_hash": old_blueprint["blueprint_hash"],
+                                        "pipeline_signature": PIPELINE_SIGNATURE,
                                     },
                                     "gap_fill": {
                                         "status": "completed",
                                         "updated_at": "t",
                                         "blueprint_hash": old_blueprint["blueprint_hash"],
+                                        "pipeline_signature": PIPELINE_SIGNATURE,
                                     },
                                     "compose_pack": {
                                         "status": "completed",
                                         "updated_at": "t",
                                         "blueprint_hash": old_blueprint["blueprint_hash"],
+                                        "pipeline_signature": PIPELINE_SIGNATURE,
                                     },
                                 }
                             }
@@ -333,7 +422,8 @@ class PipelineRunnerTest(unittest.TestCase):
             called_agents = [item["agent_name"] for item in backend.calls or []]
             self.assertIn("curriculum_anchor", called_agents)
             self.assertIn("gap_fill", called_agents)
-            self.assertIn("compose_pack", called_agents)
+            self.assertIn("pack_plan", called_agents)
+            self.assertIn("write_lecture_note", called_agents)
 
     def test_clean_output_removes_stale_course_files_before_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -378,7 +468,7 @@ class PipelineRunnerTest(unittest.TestCase):
             runner.run()
 
             self.assertFalse(stale_file.exists())
-            self.assertTrue((self._chapter_dir(output_dir, blueprint) / "review_report.json").exists())
+            self.assertFalse((self._chapter_dir(output_dir, blueprint) / "review_report.json").exists())
 
     def test_compose_payload_uses_slim_transcript_view(self) -> None:
         backend = StubLLMBackend(
@@ -419,7 +509,7 @@ class PipelineRunnerTest(unittest.TestCase):
         self.assertNotIn("raw_text", chunk)
         self.assertEqual(payload["chapter_blueprint"]["chapter_id"], "第一章·绪论")
 
-    def test_critical_review_moves_chapter_to_quarantine(self) -> None:
+    def test_explicit_review_does_not_move_chapter_to_quarantine(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             input_dir = root / "captions"
@@ -456,7 +546,7 @@ class PipelineRunnerTest(unittest.TestCase):
                         }
                     },
                     "review": {
-                        "status": "quarantine",
+                        "status": "needs_attention",
                         "issues": [
                             {
                                 "severity": "high",
@@ -466,15 +556,16 @@ class PipelineRunnerTest(unittest.TestCase):
                             }
                         ],
                     },
-                    "canonicalize": {
-                        "global_glossary": "# 全书术语表\n",
-                        "interview_index": "# 面试索引\n",
-                    },
                 }
             )
 
             runner = PipelineRunner(
-                config=PipelineConfig(input_dir=input_dir, output_dir=output_dir, course_blueprint=blueprint),
+                config=PipelineConfig(
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    course_blueprint=blueprint,
+                    enable_review=True,
+                ),
                 llm_backend=backend,
             )
 
@@ -483,12 +574,12 @@ class PipelineRunnerTest(unittest.TestCase):
             quarantined = output_dir / "courses" / blueprint["course_id"] / "quarantine" / "第一章·绪论"
             active = self._chapter_dir(output_dir, blueprint)
 
-            self.assertTrue(quarantined.exists())
-            self.assertFalse(active.exists())
-            report = json.loads((quarantined / "review_report.json").read_text(encoding="utf-8"))
-            self.assertEqual(report["status"], "quarantine")
+            self.assertFalse(quarantined.exists())
+            self.assertTrue(active.exists())
+            report = json.loads((active / "review_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "needs_attention")
 
-    def test_light_review_is_skipped_when_no_risk_signals(self) -> None:
+    def test_default_run_skips_review_even_when_risk_signals_exist(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             input_dir = root / "captions"
@@ -534,10 +625,7 @@ class PipelineRunnerTest(unittest.TestCase):
                             "05-疑点与待核.md": "# 疑点与待核\n\n- 暂无待核。",
                         }
                     },
-                    "canonicalize": {
-                        "global_glossary": "# 全书术语表\n",
-                        "interview_index": "# 面试索引\n",
-                    },
+                    "review": {"status": "approved", "issues": []},
                 }
             )
 
@@ -548,11 +636,261 @@ class PipelineRunnerTest(unittest.TestCase):
 
             runner.run()
 
-            report = json.loads((self._chapter_dir(output_dir, blueprint) / "review_report.json").read_text(encoding="utf-8"))
-            self.assertEqual(report["status"], "skipped")
-            self.assertEqual(report["reason"], "light_review_not_needed")
             called_agents = [item["agent_name"] for item in backend.calls or []]
             self.assertNotIn("review", called_agents)
+            self.assertFalse((self._chapter_dir(output_dir, blueprint) / "review_report.json").exists())
+            self.assertFalse((output_dir / "courses" / blueprint["course_id"] / "global" / "global_glossary.md").exists())
+
+    def test_explicit_review_runs_and_writes_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "captions"
+            output_dir = root / "out"
+            blueprint = make_blueprint(review_mode="standard")
+            input_dir.mkdir()
+
+            (input_dir / "第一章·绪论.md").write_text(
+                "数据库系统由数据库、硬件、软件和人员组成。",
+                encoding="utf-8",
+            )
+
+            backend = StubLLMBackend(
+                responses={
+                    "curriculum_anchor": {"chapter_summary": "绪论主题", "anchors": []},
+                    "gap_fill": {"candidates": []},
+                    "compose_pack": {
+                        "files": {
+                            "01-精讲.md": "# 精讲\n",
+                            "02-术语与定义.md": "# 术语\n",
+                            "03-面试问答.md": "# 面试问答\n",
+                            "04-跨章关联.md": "# 跨章关联\n",
+                            "05-疑点与待核.md": "# 疑点与待核\n",
+                        }
+                    },
+                    "review": {"status": "approved", "issues": []},
+                }
+            )
+
+            runner = PipelineRunner(
+                config=PipelineConfig(
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    course_blueprint=blueprint,
+                    enable_review=True,
+                ),
+                llm_backend=backend,
+            )
+
+            runner.run()
+
+            called_agents = [item["agent_name"] for item in backend.calls or []]
+            self.assertIn("review", called_agents)
+            report = json.loads((self._chapter_dir(output_dir, blueprint) / "review_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "approved")
+
+    def test_manual_global_consolidation_builds_global_outputs_from_existing_chapters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "captions"
+            output_dir = root / "out"
+            blueprint = make_blueprint()
+            course_dir = output_dir / "courses" / blueprint["course_id"]
+            chapter_dir = self._chapter_dir(output_dir, blueprint)
+            notebooklm_dir = chapter_dir / "notebooklm"
+            notebooklm_dir.mkdir(parents=True)
+            input_dir.mkdir()
+
+            course_dir.mkdir(parents=True, exist_ok=True)
+            (course_dir / "course_blueprint.json").write_text(json.dumps(blueprint, ensure_ascii=False, indent=2), encoding="utf-8")
+            (notebooklm_dir / "02-术语与定义.md").write_text("# 术语\n\n- DBMS\n", encoding="utf-8")
+            (notebooklm_dir / "03-面试问答.md").write_text("# 面试问答\n\n- 什么是 DBMS？\n", encoding="utf-8")
+            (notebooklm_dir / "04-跨章关联.md").write_text("# 跨章关联\n\n- 与后续章节关联。\n", encoding="utf-8")
+
+            backend = StubLLMBackend(
+                responses={
+                    "build_global_glossary": "# 全书术语表\n\n## 第一章·绪论\n- DBMS\n",
+                    "build_interview_index": "# 面试索引\n\n## 第一章·绪论\n- 什么是 DBMS？\n",
+                }
+            )
+
+            runner = PipelineRunner(
+                config=PipelineConfig(
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    course_blueprint=blueprint,
+                    run_global_consolidation=True,
+                ),
+                llm_backend=backend,
+            )
+
+            runner.run()
+
+            called_agents = [item["agent_name"] for item in backend.calls or []]
+            self.assertEqual(called_agents, ["build_global_glossary", "build_interview_index"])
+            self.assertTrue((course_dir / "global" / "global_glossary.md").exists())
+            self.assertTrue((course_dir / "global" / "interview_index.md").exists())
+
+    def test_heuristic_compose_pack_respects_target_output_style(self) -> None:
+        backend = HeuristicLLMBackend()
+        payload = {
+            "course_blueprint": {
+                "policy": {"target_output": "lecture_deep_dive"},
+                "chapters": [{"chapter_id": "第一章·绪论", "title": "绪论"}],
+            },
+            "chapter_blueprint": {"chapter_id": "第一章·绪论", "title": "绪论", "expected_topics": ["数据库系统组成"]},
+            "transcript_evidence": {
+                "chapter_id": "第一章·绪论",
+                "chunks": [
+                    {
+                        "chunk_id": "chunk-001",
+                        "clean_text": "数据库系统由数据库、硬件、软件和人员组成。",
+                        "speaker_role": "lecturer",
+                        "noise_flags": [],
+                    }
+                ],
+            },
+            "topic_anchor_map": {"anchors": []},
+            "augmentation_digest": {"candidates": []},
+        }
+
+        lecture_pack = backend.generate_json("compose_pack", "", payload)
+        interview_pack = backend.generate_json(
+            "compose_pack",
+            "",
+            {
+                **payload,
+                "course_blueprint": {
+                    "policy": {"target_output": "interview_knowledge_base"},
+                    "chapters": [{"chapter_id": "第一章·绪论", "title": "绪论"}],
+                },
+            },
+        )
+
+        self.assertIn("课堂精讲主线", lecture_pack["files"]["01-精讲.md"])
+        self.assertIn("面试表达", interview_pack["files"]["03-面试问答.md"])
+        self.assertNotEqual(
+            lecture_pack["files"]["01-精讲.md"],
+            interview_pack["files"]["01-精讲.md"],
+        )
+
+    def test_pipeline_signature_change_invalidates_existing_compose_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "captions"
+            output_dir = root / "out"
+            blueprint = make_blueprint()
+            course_dir = output_dir / "courses" / blueprint["course_id"]
+            chapter_dir = self._chapter_dir(output_dir, blueprint)
+            intermediate_dir = chapter_dir / "intermediate"
+            notebooklm_dir = chapter_dir / "notebooklm"
+            input_dir.mkdir()
+            intermediate_dir.mkdir(parents=True)
+            notebooklm_dir.mkdir(parents=True)
+
+            (input_dir / "第一章·绪论.md").write_text("数据库系统由数据库、硬件、软件和人员组成。", encoding="utf-8")
+            (course_dir / "course_blueprint.json").write_text(json.dumps(blueprint, ensure_ascii=False, indent=2), encoding="utf-8")
+            (intermediate_dir / "normalized_transcript.json").write_text(
+                json.dumps(
+                    {
+                        "chapter_id": "第一章·绪论",
+                        "chunks": [
+                            {
+                                "chunk_id": "chunk-001",
+                                "raw_text": "raw",
+                                "clean_text": "数据库系统由数据库、硬件、软件和人员组成。",
+                                "speaker_role": "lecturer",
+                                "noise_flags": [],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (intermediate_dir / "topic_anchor_map.json").write_text(
+                json.dumps({"chapter_summary": "s", "anchors": []}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            (intermediate_dir / "augmentation_candidates.json").write_text(
+                json.dumps({"candidates": []}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            (course_dir / "runtime_state.json").write_text(
+                json.dumps(
+                    {
+                        "course_id": blueprint["course_id"],
+                        "blueprint_hash": blueprint["blueprint_hash"],
+                        "provider": "stub",
+                        "default_model": "",
+                        "stage_models": {},
+                        "chapters": {
+                            "第一章·绪论": {
+                                "steps": {
+                                    "ingest": {"status": "completed", "updated_at": "t", "blueprint_hash": None},
+                                    "curriculum_anchor": {
+                                        "status": "completed",
+                                        "updated_at": "t",
+                                        "blueprint_hash": blueprint["blueprint_hash"],
+                                    },
+                                    "gap_fill": {
+                                        "status": "completed",
+                                        "updated_at": "t",
+                                        "blueprint_hash": blueprint["blueprint_hash"],
+                                    },
+                                    "compose_pack": {
+                                        "status": "completed",
+                                        "updated_at": "t",
+                                        "blueprint_hash": blueprint["blueprint_hash"],
+                                    },
+                                }
+                            }
+                        },
+                        "global": {},
+                        "last_error": None,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            for file_name in (
+                "01-精讲.md",
+                "02-术语与定义.md",
+                "03-面试问答.md",
+                "04-跨章关联.md",
+                "05-疑点与待核.md",
+            ):
+                (notebooklm_dir / file_name).write_text("old", encoding="utf-8")
+
+            backend = StubLLMBackend(
+                responses={
+                    "curriculum_anchor": {"chapter_summary": "x", "anchors": []},
+                    "gap_fill": {"candidates": []},
+                    "compose_pack": {
+                        "files": {
+                            "01-精讲.md": "# 新精讲\n",
+                            "02-术语与定义.md": "# 新术语\n",
+                            "03-面试问答.md": "# 新问答\n",
+                            "04-跨章关联.md": "# 新跨章关联\n",
+                            "05-疑点与待核.md": "# 新疑点与待核\n",
+                        }
+                    },
+                    "canonicalize": {"global_glossary": "# g\n", "interview_index": "# i\n"},
+                }
+            )
+
+            runner = PipelineRunner(
+                config=PipelineConfig(input_dir=input_dir, output_dir=output_dir, course_blueprint=blueprint),
+                llm_backend=backend,
+            )
+
+            runner.run()
+
+            called_agents = [item["agent_name"] for item in backend.calls or []]
+            self.assertIn("pack_plan", called_agents)
+            self.assertIn("write_lecture_note", called_agents)
+            self.assertEqual((notebooklm_dir / "01-精讲.md").read_text(encoding="utf-8"), "# 新精讲\n")
 
 
 if __name__ == "__main__":

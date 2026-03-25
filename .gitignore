@@ -4,3 +4,9 @@ __pycache__/
 .vs/
 out/
 captions/
+tmp-upload-fixtures/
+.codex/config.toml
+server-dev.log
+server-dev.err.log
+web-dev.log
+web-dev.err.log
