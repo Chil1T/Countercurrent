@@ -353,6 +353,7 @@ out/_gui/frontend-dev.log
 ## Current Notes
 
 - 输入页当前的最小可执行输入是：教材名 + 字幕文本；字幕会落盘到 GUI draft input 目录，供 `run-course` 使用。
+- GUI 草稿在生成 `course_id` 前会先 `strip()` 教材名，避免用户输入前后空格时，GUI 指向的课程目录和 pipeline 真正写入的目录不一致。
 - `runs` 已接通本地 `LocalProcessRunner`，通过 `runtime_state.json` 和 `course_blueprint.json` 映射阶段状态。
 - 运行页顶部的 `View` 只表示当前页面类型；真正的运行状态以“运行总状态”和阶段轨道为准。
 - 当前默认执行后端仍可设为 `heuristic`；只有当 GUI 默认值或课程覆盖显式切到 hosted provider，GUI 才会真正调用外部 AI 服务。

@@ -46,6 +46,20 @@ class CourseDraftApiTests(unittest.TestCase):
         self.assertTrue(payload["input_slots"][0]["supported"])
         self.assertFalse(payload["input_slots"][2]["supported"])
 
+    def test_create_course_draft_normalizes_book_title_before_deriving_course_id(self) -> None:
+        response = self.client.post(
+            "/course-drafts",
+            json={
+                "book_title": "  Database System Concepts  ",
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertEqual(payload["book_title"], "Database System Concepts")
+        self.assertEqual(payload["detected"]["course_name"], "Database System Concepts")
+        self.assertEqual(payload["course_id"], build_course_id("Database System Concepts"))
+
     def test_get_course_draft_returns_saved_draft(self) -> None:
         create_response = self.client.post(
             "/course-drafts",

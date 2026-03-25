@@ -22,19 +22,20 @@ class CourseDraftService:
 
     def create_draft(self, request: CreateCourseDraftRequest) -> CourseDraft:
         draft_id = f"draft-{uuid4().hex[:8]}"
+        book_title = request.book_title.strip()
         subtitle_assets = self._resolve_subtitle_assets(request)
         if subtitle_assets:
             self._storage.persist_subtitle_assets(draft_id=draft_id, assets=subtitle_assets)
 
         draft = CourseDraft(
             id=draft_id,
-            course_id=build_course_id(request.book_title),
-            book_title=request.book_title,
+            course_id=build_course_id(book_title),
+            book_title=book_title,
             course_url=request.course_url,
             runtime_ready=bool(subtitle_assets),
             detected=DetectedCourseSummary(
-                course_name=request.book_title,
-                textbook_title=request.book_title,
+                course_name=book_title,
+                textbook_title=book_title,
                 chapter_count=len(subtitle_assets) or None,
                 asset_completeness=self._compute_asset_completeness(request),
             ),
