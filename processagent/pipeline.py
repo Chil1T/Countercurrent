@@ -680,7 +680,8 @@ class PipelineRunner:
         if not self.runtime_state_path.exists():
             return self._fresh_runtime_state()
         state = json.loads(self.runtime_state_path.read_text(encoding="utf-8"))
-        run_identity = state.setdefault("run_identity", self._current_run_identity())
+        run_identity = self._current_run_identity()
+        state["run_identity"] = run_identity
         state["course_id"] = self.course_blueprint["course_id"]
         state["blueprint_hash"] = self.course_blueprint["blueprint_hash"]
         state["provider"] = self.config.backend_name

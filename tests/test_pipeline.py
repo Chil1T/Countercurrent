@@ -454,6 +454,66 @@ class PipelineRunnerTest(unittest.TestCase):
             self.assertIn("pack_plan", called_agents)
             self.assertIn("write_lecture_note", called_agents)
 
+    def test_new_run_overwrites_persisted_run_identity_with_current_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "captions"
+            output_dir = root / "out"
+            old_blueprint = make_blueprint(review_mode="light", target_output="standard_knowledge_pack")
+            new_blueprint = make_blueprint(review_mode="strict", target_output="interview_knowledge_base")
+            course_dir = output_dir / "courses" / new_blueprint["course_id"]
+            input_dir.mkdir()
+            course_dir.mkdir(parents=True, exist_ok=True)
+
+            (course_dir / "runtime_state.json").write_text(
+                json.dumps(
+                    {
+                        "course_id": new_blueprint["course_id"],
+                        "blueprint_hash": old_blueprint["blueprint_hash"],
+                        "provider": "stub",
+                        "default_model": "",
+                        "stage_models": {},
+                        "pipeline_signature": PIPELINE_SIGNATURE,
+                        "review_enabled": False,
+                        "review_mode": "light",
+                        "target_output": "standard_knowledge_pack",
+                        "run_identity": {
+                            "review_enabled": False,
+                            "review_mode": "light",
+                            "target_output": "standard_knowledge_pack",
+                        },
+                        "chapters": {},
+                        "global": {},
+                        "last_error": None,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            runner = PipelineRunner(
+                config=PipelineConfig(
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    course_blueprint=new_blueprint,
+                    enable_review=True,
+                ),
+                llm_backend=HeuristicLLMBackend(),
+            )
+
+            self.assertEqual(
+                runner.runtime_state["run_identity"],
+                {
+                    "review_enabled": True,
+                    "review_mode": "strict",
+                    "target_output": "interview_knowledge_base",
+                },
+            )
+            self.assertTrue(runner.runtime_state["review_enabled"])
+            self.assertEqual(runner.runtime_state["review_mode"], "strict")
+            self.assertEqual(runner.runtime_state["target_output"], "interview_knowledge_base")
+
     def test_clean_output_removes_stale_course_files_before_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
