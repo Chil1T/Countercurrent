@@ -381,6 +381,8 @@ out/_gui/frontend-dev.log
   - `template` -> `policy.target_output`
   - `review_mode` -> `policy.review_mode`
 - `build-blueprint` / `run-course` 当前会把 `simple_model` 中映射给 `blueprint_builder` 的 override 直接用于 blueprint 生成阶段，不再回落到 provider 默认模型。
+- 如果草稿尚未保存模板配置，GUI 运行默认按 `interview_knowledge_base` 解释章节 writer 集合与阶段轨道，不再错误回落到 `standard_knowledge_pack`。
+- `clean-course` 如果在运行中遇到后端重启，状态恢复会优先依据课程 runtime 目录是否已删除来判断 `cleaned`，避免清理完成后仍长期显示 `running`。
 - `content_density` 和 `export ZIP` 仍然是产品层配置，还没有进入 `run-course` 的 runtime contract。
 - checkpoint 有效性现在同时受 `blueprint_hash` 和 pipeline signature 约束；当 pipeline/runtime contract 变更时，旧产物会在下一次运行时自动失效并重跑。
 - 同课程名当前继续复用同一 `course_id`；新章节会追加到同一课程目录。

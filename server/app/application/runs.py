@@ -30,8 +30,8 @@ GLOBAL_STAGE_NAMES = [
 
 
 def _active_writer_names(target_output: str | None) -> list[str]:
-    profile = target_output or "standard_knowledge_pack"
-    return list(WRITER_STAGE_SETS.get(profile, WRITER_STAGE_SETS["standard_knowledge_pack"]))
+    profile = target_output or "interview_knowledge_base"
+    return list(WRITER_STAGE_SETS.get(profile, WRITER_STAGE_SETS["interview_knowledge_base"]))
 
 
 def _stage_names_for(run_kind: Literal["chapter", "global"], review_enabled: bool, target_output: str | None) -> list[str]:
@@ -336,6 +336,9 @@ class RunService:
                 return "running"
             if runner_status == "completed":
                 return "cleaned"
+            course_dir = self._output_root / "courses" / record.session.course_id
+            if not course_dir.exists():
+                return "cleaned"
             return record.session.status
         if runner_status is None:
             if runtime is not None and self._runtime_is_complete(
@@ -411,7 +414,7 @@ class RunService:
     def _resolve_runtime_policy(draft) -> tuple[str | None, str | None, bool]:
         config = getattr(draft, "config", None)
         if config is None:
-            return None, None, False
+            return None, "interview_knowledge_base", False
         review_mode = config.review_mode
         target_output = {
             "standard-knowledge-pack": "standard_knowledge_pack",

@@ -84,6 +84,7 @@ GUI 侧在进入 CLI 前还会先做一层解析：
 - `content_density` 和 ZIP 导出偏好还不属于 `processagent.cli` 的运行时参数契约
 - hosted API key 只允许通过单次子进程环境变量注入，不要通过修改服务进程全局环境来传播 provider 密钥
 - `resume-course` 应继续同一个 run 已冻结的流水线身份；恢复时可以刷新 provider/base URL/model/timeout，但不能借恢复路径改模板或 Review 策略
+- 当 GUI 草稿还没有保存课程模板配置时，运行时默认按 `interview_knowledge_base` 解释 active writers 与阶段轨道，保持和 pipeline blueprint 默认值一致
 - checkpoint 是否有效不能只看文件存在；当前实现还会校验 step 记录里的 pipeline signature，避免 pipeline 行为变了但旧产物被误当成可复用
 - 当前 GUI/provider 配置问题，优先按 `docs/runbooks/gui-dev.md` 的 GUI 语义解释，再回到这里核对 CLI/runtime contract
 
@@ -193,6 +194,7 @@ out/courses/<course_id>/runtime/llm_calls.jsonl
 - 这份日志只用于内部调试和追责，不面向 GUI 用户展示
 - hosted backend 优先记录 provider usage；如果 provider 不返回 usage，则回退为本地估算值
 - `RunService` 在后端重启后会优先从 `out/_gui/runs/<run_id>/session.json` 与 `process.log` 恢复历史日志，`/runs/{id}/log` 不再依赖 runner 进程内存快照
+- 对 `clean-course`，如果后端在清理过程中重启且 runner snapshot 丢失，`RunService` 会根据课程 runtime 目录是否仍存在来恢复 `cleaned` 终态，避免状态永久卡在 `running`
 
 ## Provider Pressure And Concurrency
 

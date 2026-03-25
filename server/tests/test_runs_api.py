@@ -1,4 +1,5 @@
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -82,6 +83,7 @@ class RunsApiTests(unittest.TestCase):
         self.assertEqual(payload["draft_id"], draft_payload["id"])
         self.assertEqual(payload["course_id"], build_course_id("Computer Networks"))
         self.assertEqual(payload["status"], "running")
+        self.assertEqual(payload["target_output"], "interview_knowledge_base")
         self.assertEqual([stage["name"] for stage in payload["stages"]], [
             "build_blueprint",
             "ingest",
@@ -92,14 +94,13 @@ class RunsApiTests(unittest.TestCase):
             "write_terms",
             "write_interview_qa",
             "write_cross_links",
-            "write_open_questions",
         ])
         self.assertEqual(self.runner.started_specs[0]["command"], "run-course")
         self.assertEqual(self.runner.started_specs[0]["backend"], "heuristic")
         self.assertEqual(self.runner.started_specs[0]["model"], "")
         self.assertEqual(self.runner.started_specs[0]["review_enabled"], "false")
         self.assertEqual(self.runner.started_specs[0]["review_mode"], "")
-        self.assertEqual(self.runner.started_specs[0]["target_output"], "")
+        self.assertEqual(self.runner.started_specs[0]["target_output"], "interview_knowledge_base")
         self.assertTrue(self.runner.started_specs[0]["input_dir"].endswith(f"{draft_payload['id']}\\input"))
 
     def test_create_run_maps_saved_template_config_into_runner_spec(self) -> None:
@@ -452,7 +453,6 @@ class RunsApiTests(unittest.TestCase):
             "completed",
             "completed",
             "completed",
-            "completed",
         ])
 
     def test_resume_run_restarts_runner_with_resume_command(self) -> None:
@@ -712,7 +712,6 @@ class RunsApiTests(unittest.TestCase):
             "pending",
             "pending",
             "pending",
-            "pending",
         ])
 
     def test_clean_run_reports_running_while_cleanup_subprocess_is_still_active(self) -> None:
@@ -756,6 +755,44 @@ class RunsApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(replacement_runner.started_specs[-1]["command"], "clean-course")
+
+    def test_clean_run_recovers_to_cleaned_after_restart_when_course_runtime_is_gone(self) -> None:
+        draft_id = self.client.post(
+            "/course-drafts",
+            json={
+                "book_title": "Computer Networks",
+                "subtitle_text": "# 第1章 绪论\n\n本节介绍网络分层。",
+            },
+        ).json()["id"]
+        run_payload = self.client.post("/runs", json={"draft_id": draft_id}).json()
+        run_id = run_payload["id"]
+        course_id = run_payload["course_id"]
+        self.runner.snapshots[run_id] = {"status": "completed", "last_error": None}
+
+        self.client.post(f"/runs/{run_id}/clean")
+
+        record_path = self.output_root / "_gui" / "runs" / run_id / "session.json"
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        record["session"]["status"] = "running"
+        record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        course_dir = self.output_root / "courses" / course_id
+        course_dir.mkdir(parents=True, exist_ok=True)
+        for child in list(course_dir.iterdir()):
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        course_dir.rmdir()
+
+        restarted_client = TestClient(
+            create_app(output_root=self.output_root, run_runner=StubRunner(), gui_config_path=self.gui_config_path)
+        )
+
+        response = restarted_client.get(f"/runs/{run_id}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "cleaned")
 
     def test_run_events_stream_returns_sse_payload(self) -> None:
         draft_id = self.client.post(
