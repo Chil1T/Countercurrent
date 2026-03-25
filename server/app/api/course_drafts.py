@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request, status
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 
 from server.app.application.course_drafts import CourseDraftService
 from server.app.models.course_draft import CourseDraft, CreateCourseDraftRequest, SubtitleAssetInput
@@ -12,10 +14,13 @@ def build_course_drafts_router(service: CourseDraftService) -> APIRouter:
     @router.post("/course-drafts", response_model=CourseDraft, status_code=status.HTTP_201_CREATED)
     async def create_course_draft(request: Request) -> CourseDraft:
         content_type = request.headers.get("content-type", "")
-        if "multipart/form-data" in content_type:
-            payload = await _parse_multipart_create_request(request)
-        else:
-            payload = CreateCourseDraftRequest.model_validate(await request.json())
+        try:
+            if "multipart/form-data" in content_type:
+                payload = await _parse_multipart_create_request(request)
+            else:
+                payload = CreateCourseDraftRequest.model_validate(await request.json())
+        except ValidationError as exc:
+            raise RequestValidationError(exc.errors()) from exc
         return service.create_draft(payload)
 
     @router.get("/course-drafts/{draft_id}", response_model=CourseDraft)

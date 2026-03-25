@@ -14,7 +14,7 @@
 要从 GUI 成功启动一次课程运行，当前最小前置条件是：
 
 - 已生成 `CourseDraft`
-- 已提供 `book_title`
+- 已提供非空白的 `book_title`
 - 已提供至少一个可落盘的字幕/转录输入
 - 后端已为该草稿生成 GUI draft input 目录
 

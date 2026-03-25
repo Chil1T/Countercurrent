@@ -60,6 +60,16 @@ class CourseDraftApiTests(unittest.TestCase):
         self.assertEqual(payload["detected"]["course_name"], "Database System Concepts")
         self.assertEqual(payload["course_id"], build_course_id("Database System Concepts"))
 
+    def test_create_course_draft_rejects_blank_book_title(self) -> None:
+        response = self.client.post(
+            "/course-drafts",
+            json={
+                "book_title": "   ",
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
+
     def test_get_course_draft_returns_saved_draft(self) -> None:
         create_response = self.client.post(
             "/course-drafts",

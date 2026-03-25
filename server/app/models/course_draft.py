@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from server.app.models.template_preset import DraftConfig
 
@@ -40,3 +40,11 @@ class CreateCourseDraftRequest(BaseModel):
     course_url: str | None = None
     subtitle_text: str | None = None
     subtitle_assets: list[SubtitleAssetInput] | None = None
+
+    @field_validator("book_title")
+    @classmethod
+    def validate_book_title(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("book_title must not be blank")
+        return normalized

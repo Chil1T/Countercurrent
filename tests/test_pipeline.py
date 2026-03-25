@@ -68,6 +68,29 @@ class PipelineRunnerTest(unittest.TestCase):
             },
         )
 
+    def test_heuristic_run_course_completes_with_slim_writer_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "captions"
+            output_dir = root / "out"
+            blueprint = make_blueprint(target_output="standard_knowledge_pack")
+            input_dir.mkdir()
+            (input_dir / "第一章·绪论.md").write_text(
+                "数据库系统由数据库、硬件、软件和人员组成。三层模式两级映像是重点。",
+                encoding="utf-8",
+            )
+
+            runner = PipelineRunner(
+                config=PipelineConfig(input_dir=input_dir, output_dir=output_dir, course_blueprint=blueprint),
+                llm_backend=HeuristicLLMBackend(),
+            )
+
+            runner.run()
+
+            chapter_dir = self._chapter_dir(output_dir, blueprint)
+            self.assertTrue((chapter_dir / "notebooklm" / "01-精讲.md").exists())
+            self.assertTrue((chapter_dir / "notebooklm" / "05-疑点与待核.md").exists())
+
     def _chapter_dir(self, output_dir: Path, blueprint: dict) -> Path:
         return output_dir / "courses" / blueprint["course_id"] / "chapters" / "第一章·绪论"
 

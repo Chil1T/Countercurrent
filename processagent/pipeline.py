@@ -947,16 +947,25 @@ class HeuristicLLMBackend:
 
     def _compose_pack(self, payload: dict[str, Any]) -> dict[str, Any]:
         chapter = payload["chapter_blueprint"]
-        transcript = payload["transcript_evidence"]
+        transcript = payload.get("transcript_evidence")
+        evidence_summary = payload.get("evidence_summary", {})
         anchors = payload["topic_anchor_map"].get("anchors", [])
         augmentation = payload["augmentation_digest"]
         candidates = augmentation.get("candidates", [])
         target_output = payload.get("course_blueprint", {}).get("policy", {}).get("target_output", "interview_knowledge_base")
 
-        lecture_lines = "\n".join(
-            f"- `{chunk['chunk_id']}` {chunk['clean_text']}（来源：transcript）"
-            for chunk in transcript["chunks"]
-        ) or "- 暂无 transcript 证据。"
+        transcript_chunks = transcript.get("chunks", []) if transcript else []
+        if transcript_chunks:
+            lecture_lines = "\n".join(
+                f"- `{chunk['chunk_id']}` {chunk['clean_text']}（来源：transcript）"
+                for chunk in transcript_chunks
+            )
+        else:
+            lecture_lines = "\n".join(
+                f"- `{item['chunk_id']}` {item['excerpt']}（来源：证据摘要）"
+                for item in evidence_summary.get("highlights", [])
+            )
+        lecture_lines = lecture_lines or "- 暂无 transcript 证据。"
         term_lines = "\n".join(
             f"- **{anchor['canonical_topic']}**："
             f"{'录音已覆盖。' if anchor['coverage_status'] == 'covered' else '录音未讲清，需教材补全。'}"
