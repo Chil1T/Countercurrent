@@ -33,9 +33,8 @@ export function AppShell({
         <div className="mx-auto flex w-[95vw] max-w-[1920px] flex-wrap items-center gap-3 px-3 py-3 md:px-4 lg:px-5">
           <div className="mr-3">
             <p className="text-[11px] font-semibold uppercase tracking-[0.3em] text-stone-500">
-              Countercurrent
+              ReCurr
             </p>
-            <div className="mt-1 text-sm font-semibold text-stone-800">步骤导航</div>
           </div>
 
           <nav className="flex min-w-0 flex-1 flex-wrap gap-3">
@@ -64,13 +63,13 @@ export function AppShell({
               ),
             )}
           </nav>
-          <div className="ml-auto flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-stone-200/80 bg-white/90 p-2 shadow-sm">
+          <div className="ml-auto flex h-[80px] w-[80px] shrink-0 items-center justify-center overflow-hidden">
             <Image
               src="/countercurrent-logo.svg"
-              alt="Countercurrent logo"
-              width={32}
-              height={32}
-              className="h-8 w-8"
+              alt="ReCurr logo"
+              width={100}
+              height={100}
+              className="h-[100px] w-[100px] max-w-none shrink-0"
               priority
             />
           </div>

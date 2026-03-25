@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Countercurrent",
-  description: "Web product shell for the Countercurrent blueprint-first pipeline.",
+  title: "ReCurr",
+  description: "Web product shell for the ReCurr blueprint-first pipeline.",
 };
 
 export default function RootLayout({
