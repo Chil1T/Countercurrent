@@ -76,7 +76,8 @@ GUI 侧在进入 CLI 前还会先做一层解析：
 - `review` 当前默认关闭；只有显式传 `--enable-review` 时才会执行 reviewer
 - `quarantine` 机制已移除；章节产物始终保留在 `chapters/` 下
 - `global/*` 当前不是章节主流程的一部分；只通过 `build-global` 手动触发
-- `build-global` 汇总章节时，优先以当前 `runtime_state.json` 里的章节 scope 作为输入集合；旧 run 遗留但不在当前 runtime scope 里的章节目录不会再混入全局术语表或面试索引
+- `build-global` 不会改写已冻结的 `runtime_state.run_identity`；它只重建 `global/*`，不会把原先章节 run 的 `review_enabled / review_mode / target_output` 改成当前临时配置
+- `build-global` 汇总章节时，优先以当前 `runtime_state.json` 里的章节 scope 作为输入集合；只有其关键 writer step 仍匹配当前 `blueprint_hash` 的 scope 才会被视为活跃章节，旧 run 遗留 scope 或目录不会再混入全局术语表或面试索引
 - 对同一个 `course_id`，当前 orchestration 只允许一个活跃 run；无论章节主流程还是 `build-global`，如果已有 `running` run 占用同一课程输出目录，就应先拒绝新 run，避免并发写坏 `runtime_state.json` 和 checkpoint
 - GUI 当前只把两类配置接入 runtime：
   - `provider/backend`

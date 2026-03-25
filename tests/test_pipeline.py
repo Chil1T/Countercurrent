@@ -514,6 +514,201 @@ class PipelineRunnerTest(unittest.TestCase):
             self.assertEqual(runner.runtime_state["review_mode"], "strict")
             self.assertEqual(runner.runtime_state["target_output"], "interview_knowledge_base")
 
+    def test_manual_global_consolidation_preserves_persisted_run_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "captions"
+            output_dir = root / "out"
+            blueprint = make_blueprint(review_mode="standard", target_output="interview_knowledge_base")
+            course_dir = output_dir / "courses" / blueprint["course_id"]
+            notebooklm_dir = self._chapter_dir(output_dir, blueprint) / "notebooklm"
+            input_dir.mkdir()
+            notebooklm_dir.mkdir(parents=True)
+            course_dir.mkdir(parents=True, exist_ok=True)
+
+            (course_dir / "course_blueprint.json").write_text(
+                json.dumps(blueprint, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            (course_dir / "runtime_state.json").write_text(
+                json.dumps(
+                    {
+                        "course_id": blueprint["course_id"],
+                        "blueprint_hash": blueprint["blueprint_hash"],
+                        "provider": "stub",
+                        "default_model": "",
+                        "stage_models": {},
+                        "pipeline_signature": PIPELINE_SIGNATURE,
+                        "review_enabled": True,
+                        "review_mode": "standard",
+                        "target_output": "interview_knowledge_base",
+                        "run_identity": {
+                            "review_enabled": True,
+                            "review_mode": "standard",
+                            "target_output": "interview_knowledge_base",
+                        },
+                        "chapters": {
+                            "第一章·绪论": {
+                                "steps": {
+                                    "write_terms": {
+                                        "status": "completed",
+                                        "blueprint_hash": blueprint["blueprint_hash"],
+                                        "pipeline_signature": PIPELINE_SIGNATURE,
+                                    },
+                                    "write_interview_qa": {
+                                        "status": "completed",
+                                        "blueprint_hash": blueprint["blueprint_hash"],
+                                        "pipeline_signature": PIPELINE_SIGNATURE,
+                                    },
+                                    "write_cross_links": {
+                                        "status": "completed",
+                                        "blueprint_hash": blueprint["blueprint_hash"],
+                                        "pipeline_signature": PIPELINE_SIGNATURE,
+                                    },
+                                }
+                            }
+                        },
+                        "global": {},
+                        "last_error": None,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (notebooklm_dir / "02-术语与定义.md").write_text("# 术语\n\n- DBMS\n", encoding="utf-8")
+            (notebooklm_dir / "03-面试问答.md").write_text("# 面试问答\n\n- 什么是 DBMS？\n", encoding="utf-8")
+            (notebooklm_dir / "04-跨章关联.md").write_text("# 跨章关联\n\n- 与后续章节关联。\n", encoding="utf-8")
+
+            backend = StubLLMBackend(
+                responses={
+                    "build_global_glossary": "# glossary\n",
+                    "build_interview_index": "# index\n",
+                }
+            )
+
+            runner = PipelineRunner(
+                config=PipelineConfig(
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    course_blueprint=blueprint,
+                    run_global_consolidation=True,
+                ),
+                llm_backend=backend,
+            )
+
+            self.assertEqual(
+                runner.runtime_state["run_identity"],
+                {
+                    "review_enabled": True,
+                    "review_mode": "standard",
+                    "target_output": "interview_knowledge_base",
+                },
+            )
+
+    def test_manual_global_consolidation_excludes_stale_runtime_scopes_from_old_blueprint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "captions"
+            output_dir = root / "out"
+            blueprint = make_blueprint(target_output="standard_knowledge_pack")
+            course_dir = output_dir / "courses" / blueprint["course_id"]
+            current_notebooklm_dir = self._chapter_dir(output_dir, blueprint) / "notebooklm"
+            stale_notebooklm_dir = course_dir / "chapters" / "第二章·旧章节" / "notebooklm"
+            input_dir.mkdir()
+            current_notebooklm_dir.mkdir(parents=True)
+            stale_notebooklm_dir.mkdir(parents=True)
+            course_dir.mkdir(parents=True, exist_ok=True)
+
+            current_step = {
+                "status": "completed",
+                "updated_at": "t",
+                "blueprint_hash": blueprint["blueprint_hash"],
+                "pipeline_signature": PIPELINE_SIGNATURE,
+            }
+            stale_step = {
+                "status": "completed",
+                "updated_at": "old",
+                "blueprint_hash": "stale-blueprint-hash",
+                "pipeline_signature": PIPELINE_SIGNATURE,
+            }
+
+            (course_dir / "course_blueprint.json").write_text(
+                json.dumps(blueprint, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            (course_dir / "runtime_state.json").write_text(
+                json.dumps(
+                    {
+                        "course_id": blueprint["course_id"],
+                        "blueprint_hash": blueprint["blueprint_hash"],
+                        "provider": "stub",
+                        "default_model": "",
+                        "stage_models": {},
+                        "pipeline_signature": PIPELINE_SIGNATURE,
+                        "review_enabled": False,
+                        "review_mode": blueprint["policy"]["review_mode"],
+                        "target_output": blueprint["policy"]["target_output"],
+                        "run_identity": {
+                            "review_enabled": False,
+                            "review_mode": blueprint["policy"]["review_mode"],
+                            "target_output": blueprint["policy"]["target_output"],
+                        },
+                        "chapters": {
+                            "第一章·绪论": {
+                                "steps": {
+                                    "write_terms": current_step,
+                                    "write_interview_qa": current_step,
+                                    "write_cross_links": current_step,
+                                }
+                            },
+                            "第二章·旧章节": {
+                                "steps": {
+                                    "write_terms": stale_step,
+                                    "write_interview_qa": stale_step,
+                                    "write_cross_links": stale_step,
+                                }
+                            },
+                        },
+                        "global": {},
+                        "last_error": None,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (current_notebooklm_dir / "02-术语与定义.md").write_text("# 术语\n\n- DBMS\n", encoding="utf-8")
+            (current_notebooklm_dir / "03-面试问答.md").write_text("# 面试问答\n\n- 什么是 DBMS？\n", encoding="utf-8")
+            (current_notebooklm_dir / "04-跨章关联.md").write_text("# 跨章关联\n\n- 与后续章节关联。\n", encoding="utf-8")
+            (stale_notebooklm_dir / "02-术语与定义.md").write_text("# 术语\n\n- STALE\n", encoding="utf-8")
+            (stale_notebooklm_dir / "03-面试问答.md").write_text("# 面试问答\n\n- 什么是 STALE？\n", encoding="utf-8")
+            (stale_notebooklm_dir / "04-跨章关联.md").write_text("# 跨章关联\n\n- 这是旧章节。\n", encoding="utf-8")
+
+            backend = StubLLMBackend(
+                responses={
+                    "build_global_glossary": "# 全书术语表\n\n## 第一章·绪论\n- DBMS\n",
+                    "build_interview_index": "# 面试索引\n\n## 第一章·绪论\n- 什么是 DBMS？\n",
+                }
+            )
+
+            runner = PipelineRunner(
+                config=PipelineConfig(
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    course_blueprint=blueprint,
+                    run_global_consolidation=True,
+                ),
+                llm_backend=backend,
+            )
+
+            runner.run()
+
+            global_calls = [item for item in (backend.calls or []) if item["agent_name"] == "build_global_glossary"]
+            self.assertEqual(len(global_calls), 1)
+            chapters_payload = global_calls[0]["payload"]["chapters"]
+            self.assertEqual([chapter["chapter_id"] for chapter in chapters_payload], ["第一章·绪论"])
+
     def test_clean_output_removes_stale_course_files_before_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -964,9 +1159,24 @@ class PipelineRunnerTest(unittest.TestCase):
                         "chapters": {
                             fallback_chapter_id: {
                                 "steps": {
-                                    "write_terms": {},
-                                    "write_interview_qa": {},
-                                    "write_cross_links": {},
+                                    "write_terms": {
+                                        "status": "completed",
+                                        "updated_at": "t",
+                                        "blueprint_hash": blueprint["blueprint_hash"],
+                                        "pipeline_signature": PIPELINE_SIGNATURE,
+                                    },
+                                    "write_interview_qa": {
+                                        "status": "completed",
+                                        "updated_at": "t",
+                                        "blueprint_hash": blueprint["blueprint_hash"],
+                                        "pipeline_signature": PIPELINE_SIGNATURE,
+                                    },
+                                    "write_cross_links": {
+                                        "status": "completed",
+                                        "updated_at": "t",
+                                        "blueprint_hash": blueprint["blueprint_hash"],
+                                        "pipeline_signature": PIPELINE_SIGNATURE,
+                                    },
                                 }
                             }
                         },
@@ -1035,9 +1245,24 @@ class PipelineRunnerTest(unittest.TestCase):
                 "chapters": {
                     "第一章·绪论": {
                         "steps": {
-                            "write_terms": {},
-                            "write_interview_qa": {},
-                            "write_cross_links": {},
+                            "write_terms": {
+                                "status": "completed",
+                                "updated_at": "t",
+                                "blueprint_hash": blueprint["blueprint_hash"],
+                                "pipeline_signature": PIPELINE_SIGNATURE,
+                            },
+                            "write_interview_qa": {
+                                "status": "completed",
+                                "updated_at": "t",
+                                "blueprint_hash": blueprint["blueprint_hash"],
+                                "pipeline_signature": PIPELINE_SIGNATURE,
+                            },
+                            "write_cross_links": {
+                                "status": "completed",
+                                "updated_at": "t",
+                                "blueprint_hash": blueprint["blueprint_hash"],
+                                "pipeline_signature": PIPELINE_SIGNATURE,
+                            },
                         }
                     }
                 },

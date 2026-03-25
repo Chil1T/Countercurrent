@@ -345,9 +345,13 @@ class PipelineRunner:
         if not chapters_dir.exists():
             return active_chapters
 
-        runtime_chapter_ids = tuple(self.runtime_state.get("chapters", {}).keys())
-        if runtime_chapter_ids:
-            allowed_chapter_ids = set(runtime_chapter_ids)
+        runtime_chapters = self.runtime_state.get("chapters", {})
+        if runtime_chapters:
+            allowed_chapter_ids = {
+                chapter_id
+                for chapter_id, chapter_state in runtime_chapters.items()
+                if self._chapter_scope_matches_current_blueprint(chapter_state)
+            }
         else:
             allowed_chapter_ids = {
                 str(chapter.get("chapter_id"))
@@ -376,6 +380,17 @@ class PipelineRunner:
                 }
             )
         return active_chapters
+
+    def _chapter_scope_matches_current_blueprint(self, chapter_state: dict[str, Any]) -> bool:
+        steps = chapter_state.get("steps", {})
+        current_blueprint_hash = self.course_blueprint["blueprint_hash"]
+        for step_name in ("write_terms", "write_cross_links"):
+            step_record = steps.get(step_name)
+            if not isinstance(step_record, dict):
+                return False
+            if step_record.get("blueprint_hash") != current_blueprint_hash:
+                return False
+        return True
 
     def _slim_course_blueprint(self) -> dict[str, Any]:
         return {
@@ -680,8 +695,11 @@ class PipelineRunner:
         if not self.runtime_state_path.exists():
             return self._fresh_runtime_state()
         state = json.loads(self.runtime_state_path.read_text(encoding="utf-8"))
-        run_identity = self._current_run_identity()
-        state["run_identity"] = run_identity
+        if self.config.run_global_consolidation and "run_identity" in state:
+            run_identity = state["run_identity"]
+        else:
+            run_identity = self._current_run_identity()
+            state["run_identity"] = run_identity
         state["course_id"] = self.course_blueprint["course_id"]
         state["blueprint_hash"] = self.course_blueprint["blueprint_hash"]
         state["provider"] = self.config.backend_name
