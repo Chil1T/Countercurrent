@@ -345,8 +345,9 @@ class PipelineRunner:
         if not chapters_dir.exists():
             return active_chapters
 
-        for chapter_blueprint in self.course_blueprint.get("chapters", []):
-            chapter_id = chapter_blueprint["chapter_id"]
+        for chapter_dir in sorted(path for path in chapters_dir.iterdir() if path.is_dir()):
+            chapter_id = chapter_dir.name
+            chapter_blueprint = match_chapter_for_transcript(self.course_blueprint, chapter_id)
             notebooklm_dir = chapters_dir / chapter_id / "notebooklm"
             term_path = notebooklm_dir / "02-术语与定义.md"
             interview_path = notebooklm_dir / "03-面试问答.md"

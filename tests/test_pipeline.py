@@ -838,6 +838,78 @@ class PipelineRunnerTest(unittest.TestCase):
             self.assertTrue((course_dir / "global" / "global_glossary.md").exists())
             self.assertTrue((course_dir / "global" / "interview_index.md").exists())
 
+    def test_manual_global_consolidation_collects_runtime_fallback_chapter_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "captions"
+            output_dir = root / "out"
+            blueprint = finalize_blueprint(
+                {
+                    "course_name": "数据库系统概论",
+                    "source_type": "published_textbook",
+                    "book": {
+                        "title": "数据库系统概论",
+                        "authors": ["王珊", "萨师煊"],
+                        "edition": "第5版",
+                        "publisher": "高等教育出版社",
+                        "isbn": "",
+                    },
+                    "chapters": [
+                        {
+                            "chapter_id": "toc-chapter-11",
+                            "title": "目录章节十一",
+                            "aliases": [],
+                            "expected_topics": [],
+                        }
+                    ],
+                    "policy": {
+                        "augmentation_mode": "conservative",
+                        "review_mode": "light",
+                        "target_output": "interview_knowledge_base",
+                    },
+                    "provenance": {
+                        "metadata": {"strategy": "user_input"},
+                        "chapter_structure": {"strategy": "user_toc"},
+                    },
+                }
+            )
+            course_dir = output_dir / "courses" / blueprint["course_id"]
+            fallback_chapter_id = "第十一章·数据库恢复技术"
+            notebooklm_dir = course_dir / "chapters" / fallback_chapter_id / "notebooklm"
+            notebooklm_dir.mkdir(parents=True)
+            input_dir.mkdir()
+
+            course_dir.mkdir(parents=True, exist_ok=True)
+            (course_dir / "course_blueprint.json").write_text(
+                json.dumps(blueprint, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            (notebooklm_dir / "02-术语与定义.md").write_text("# 术语\n\n- WAL\n", encoding="utf-8")
+            (notebooklm_dir / "03-面试问答.md").write_text("# 面试问答\n\n- 什么是 WAL？\n", encoding="utf-8")
+            (notebooklm_dir / "04-跨章关联.md").write_text("# 跨章关联\n\n- 与日志恢复关联。\n", encoding="utf-8")
+
+            backend = StubLLMBackend(
+                responses={
+                    "build_global_glossary": "# 全书术语表\n\n## 第十一章·数据库恢复技术\n- WAL\n",
+                    "build_interview_index": "# 面试索引\n\n## 第十一章·数据库恢复技术\n- 什么是 WAL？\n",
+                }
+            )
+
+            runner = PipelineRunner(
+                config=PipelineConfig(
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    course_blueprint=blueprint,
+                    run_global_consolidation=True,
+                ),
+                llm_backend=backend,
+            )
+
+            runner.run()
+
+            self.assertTrue((course_dir / "global" / "global_glossary.md").exists())
+            self.assertTrue((course_dir / "global" / "interview_index.md").exists())
+
     def test_heuristic_compose_pack_respects_target_output_style(self) -> None:
         backend = HeuristicLLMBackend()
         payload = {
