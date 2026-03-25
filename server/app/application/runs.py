@@ -137,9 +137,10 @@ class RunService:
         return self.get_run(session.id)
 
     def resume_run(self, run_id: str) -> RunSession | None:
-        record = self._runs.get(run_id)
+        record = self._runs.get(run_id) or self._load_record(run_id)
         if record is None:
             return None
+        self._runs[run_id] = record
         self._ensure_mutable(record.session.id)
         draft = self._course_drafts.get_draft(record.session.draft_id)
         if draft is None:
@@ -169,9 +170,10 @@ class RunService:
         return self.get_run(run_id)
 
     def clean_run(self, run_id: str) -> RunSession | None:
-        record = self._runs.get(run_id)
+        record = self._runs.get(run_id) or self._load_record(run_id)
         if record is None:
             return None
+        self._runs[run_id] = record
         self._ensure_mutable(record.session.id)
         draft = self._course_drafts.get_draft(record.session.draft_id)
         if draft is None:
@@ -317,7 +319,13 @@ class RunService:
     def _resolve_status(self, record: _RunRecord, snapshot, runtime: RuntimeSnapshot | None) -> str:
         runner_status = self._snapshot_value(snapshot, "status")
         if record.last_command == "clean-course":
-            return "failed" if runner_status == "failed" else "cleaned"
+            if runner_status == "failed":
+                return "failed"
+            if runner_status == "running":
+                return "running"
+            if runner_status == "completed":
+                return "cleaned"
+            return record.session.status
         if runner_status is None:
             if runtime is not None and self._runtime_is_complete(
                 runtime=runtime,

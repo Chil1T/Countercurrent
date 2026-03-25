@@ -92,6 +92,7 @@ class RunsApiTests(unittest.TestCase):
             "write_terms",
             "write_interview_qa",
             "write_cross_links",
+            "write_open_questions",
         ])
         self.assertEqual(self.runner.started_specs[0]["command"], "run-course")
         self.assertEqual(self.runner.started_specs[0]["backend"], "heuristic")
@@ -451,6 +452,7 @@ class RunsApiTests(unittest.TestCase):
             "completed",
             "completed",
             "completed",
+            "completed",
         ])
 
     def test_resume_run_restarts_runner_with_resume_command(self) -> None:
@@ -475,6 +477,32 @@ class RunsApiTests(unittest.TestCase):
         self.assertEqual(payload["id"], run_id)
         self.assertEqual(payload["status"], "running")
         self.assertEqual(self.runner.started_specs[-1]["command"], "resume-course")
+
+    def test_resume_run_restores_persisted_record_before_restarting_runner(self) -> None:
+        draft_id = self.client.post(
+            "/course-drafts",
+            json={
+                "book_title": "Computer Networks",
+                "subtitle_text": "# 第1章 绪论\n\n本节介绍网络分层。",
+            },
+        ).json()["id"]
+        run_payload = self.client.post("/runs", json={"draft_id": draft_id}).json()
+        run_id = run_payload["id"]
+        self.runner.snapshots[run_id] = {
+            "status": "failed",
+            "last_error": "pipeline interrupted",
+        }
+
+        replacement_runner = StubRunner()
+        restart_client = TestClient(
+            create_app(output_root=self.output_root, run_runner=replacement_runner, gui_config_path=self.gui_config_path)
+        )
+
+        response = restart_client.post(f"/runs/{run_id}/resume")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id"], run_id)
+        self.assertEqual(replacement_runner.started_specs[-1]["command"], "resume-course")
 
     def test_resume_run_refreshes_provider_routing_but_keeps_frozen_pipeline_identity(self) -> None:
         self.client.put(
@@ -657,7 +685,50 @@ class RunsApiTests(unittest.TestCase):
             "pending",
             "pending",
             "pending",
+            "pending",
         ])
+
+    def test_clean_run_reports_running_while_cleanup_subprocess_is_still_active(self) -> None:
+        draft_id = self.client.post(
+            "/course-drafts",
+            json={
+                "book_title": "Computer Networks",
+                "subtitle_text": "# 第1章 绪论\n\n本节介绍网络分层。",
+            },
+        ).json()["id"]
+        run_payload = self.client.post("/runs", json={"draft_id": draft_id}).json()
+        run_id = run_payload["id"]
+        self.runner.snapshots[run_id] = {"status": "completed", "last_error": None}
+
+        response = self.client.post(f"/runs/{run_id}/clean")
+        self.runner.snapshots[run_id] = {"status": "running", "last_error": None}
+        refreshed = self.client.get(f"/runs/{run_id}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(refreshed.status_code, 200)
+        self.assertEqual(refreshed.json()["status"], "running")
+
+    def test_clean_run_restores_persisted_record_before_restarting_runner(self) -> None:
+        draft_id = self.client.post(
+            "/course-drafts",
+            json={
+                "book_title": "Computer Networks",
+                "subtitle_text": "# 第1章 绪论\n\n本节介绍网络分层。",
+            },
+        ).json()["id"]
+        run_payload = self.client.post("/runs", json={"draft_id": draft_id}).json()
+        run_id = run_payload["id"]
+        self.runner.snapshots[run_id] = {"status": "completed", "last_error": None}
+
+        replacement_runner = StubRunner()
+        restart_client = TestClient(
+            create_app(output_root=self.output_root, run_runner=replacement_runner, gui_config_path=self.gui_config_path)
+        )
+
+        response = restart_client.post(f"/runs/{run_id}/clean")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(replacement_runner.started_specs[-1]["command"], "clean-course")
 
     def test_run_events_stream_returns_sse_payload(self) -> None:
         draft_id = self.client.post(

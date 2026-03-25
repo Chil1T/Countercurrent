@@ -53,6 +53,7 @@ class PipelineRunnerTest(unittest.TestCase):
                 "write_terms",
                 "write_interview_qa",
                 "write_cross_links",
+                "write_open_questions",
                 "review",
                 "build_global_glossary",
                 "build_interview_index",
@@ -75,7 +76,7 @@ class PipelineRunnerTest(unittest.TestCase):
             root = Path(tmp)
             input_dir = root / "captions"
             output_dir = root / "out"
-            blueprint = make_blueprint()
+            blueprint = make_blueprint(target_output="standard_knowledge_pack")
             input_dir.mkdir()
 
             (input_dir / "第一章·绪论.md").write_text(
@@ -130,12 +131,16 @@ class PipelineRunnerTest(unittest.TestCase):
             self.assertTrue((chapter_dir / "intermediate" / "augmentation_candidates.json").exists())
             self.assertFalse((chapter_dir / "review_report.json").exists())
             self.assertTrue((chapter_dir / "notebooklm" / "01-精讲.md").exists())
+            self.assertTrue((chapter_dir / "notebooklm" / "05-疑点与待核.md").exists())
             self.assertFalse((course_dir / "global" / "global_glossary.md").exists())
 
             runtime_state = json.loads((course_dir / "runtime_state.json").read_text(encoding="utf-8"))
             self.assertEqual(runtime_state["blueprint_hash"], blueprint["blueprint_hash"])
             self.assertEqual(runtime_state["chapters"]["第一章·绪论"]["steps"]["pack_plan"]["status"], "completed")
-            self.assertNotIn("write_open_questions", runtime_state["chapters"]["第一章·绪论"]["steps"])
+            self.assertEqual(
+                runtime_state["chapters"]["第一章·绪论"]["steps"]["write_open_questions"]["status"],
+                "completed",
+            )
             self.assertEqual(runtime_state["global"], {})
 
     def test_run_writes_per_call_llm_accountability_log(self) -> None:
@@ -143,7 +148,7 @@ class PipelineRunnerTest(unittest.TestCase):
             root = Path(tmp)
             input_dir = root / "captions"
             output_dir = root / "out"
-            blueprint = make_blueprint()
+            blueprint = make_blueprint(target_output="standard_knowledge_pack")
             input_dir.mkdir()
             (input_dir / "第一章·绪论.md").write_text(
                 "第一章 数据库发展经历人工管理、文件系统和数据库系统阶段。",
@@ -187,6 +192,7 @@ class PipelineRunnerTest(unittest.TestCase):
                     "write_terms",
                     "write_interview_qa",
                     "write_cross_links",
+                    "write_open_questions",
                 ],
             )
             self.assertTrue(all(entry["provider"] == "stub" for entry in entries))
@@ -584,7 +590,7 @@ class PipelineRunnerTest(unittest.TestCase):
             root = Path(tmp)
             input_dir = root / "captions"
             output_dir = root / "out"
-            blueprint = make_blueprint()
+            blueprint = make_blueprint(target_output="standard_knowledge_pack")
             input_dir.mkdir()
 
             (input_dir / "第一章·绪论.md").write_text(
@@ -693,7 +699,7 @@ class PipelineRunnerTest(unittest.TestCase):
             root = Path(tmp)
             input_dir = root / "captions"
             output_dir = root / "out"
-            blueprint = make_blueprint()
+            blueprint = make_blueprint(target_output="standard_knowledge_pack")
             course_dir = output_dir / "courses" / blueprint["course_id"]
             chapter_dir = self._chapter_dir(output_dir, blueprint)
             notebooklm_dir = chapter_dir / "notebooklm"
@@ -710,6 +716,49 @@ class PipelineRunnerTest(unittest.TestCase):
                 responses={
                     "build_global_glossary": "# 全书术语表\n\n## 第一章·绪论\n- DBMS\n",
                     "build_interview_index": "# 面试索引\n\n## 第一章·绪论\n- 什么是 DBMS？\n",
+                }
+            )
+
+            runner = PipelineRunner(
+                config=PipelineConfig(
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    course_blueprint=blueprint,
+                    run_global_consolidation=True,
+                ),
+                llm_backend=backend,
+            )
+
+            runner.run()
+
+            called_agents = [item["agent_name"] for item in backend.calls or []]
+            self.assertEqual(called_agents, ["build_global_glossary", "build_interview_index"])
+            self.assertTrue((course_dir / "global" / "global_glossary.md").exists())
+            self.assertTrue((course_dir / "global" / "interview_index.md").exists())
+
+    def test_manual_global_consolidation_accepts_deep_dive_chapters_without_interview_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "captions"
+            output_dir = root / "out"
+            blueprint = make_blueprint(target_output="lecture_deep_dive")
+            course_dir = output_dir / "courses" / blueprint["course_id"]
+            chapter_dir = self._chapter_dir(output_dir, blueprint)
+            notebooklm_dir = chapter_dir / "notebooklm"
+            notebooklm_dir.mkdir(parents=True)
+            input_dir.mkdir()
+
+            course_dir.mkdir(parents=True, exist_ok=True)
+            (course_dir / "course_blueprint.json").write_text(
+                json.dumps(blueprint, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            (notebooklm_dir / "02-术语与定义.md").write_text("# 术语\n\n- DBMS\n", encoding="utf-8")
+            (notebooklm_dir / "04-跨章关联.md").write_text("# 跨章关联\n\n- 与后续章节关联。\n", encoding="utf-8")
+
+            backend = StubLLMBackend(
+                responses={
+                    "build_global_glossary": "# 全书术语表\n\n## 第一章·绪论\n- DBMS\n",
+                    "build_interview_index": "# 面试索引\n\n## 第一章·绪论\n- 课堂精讲重点\n",
                 }
             )
 
@@ -778,7 +827,7 @@ class PipelineRunnerTest(unittest.TestCase):
             root = Path(tmp)
             input_dir = root / "captions"
             output_dir = root / "out"
-            blueprint = make_blueprint()
+            blueprint = make_blueprint(target_output="standard_knowledge_pack")
             course_dir = output_dir / "courses" / blueprint["course_id"]
             chapter_dir = self._chapter_dir(output_dir, blueprint)
             intermediate_dir = chapter_dir / "intermediate"

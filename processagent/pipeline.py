@@ -42,6 +42,7 @@ WRITER_STAGE_SETS = {
         "write_terms",
         "write_interview_qa",
         "write_cross_links",
+        "write_open_questions",
     ),
     "interview_knowledge_base": (
         "write_lecture_note",
@@ -59,6 +60,7 @@ HOSTED_PRESSURE_STAGES = (
     "write_terms",
     "write_interview_qa",
     "write_cross_links",
+    "write_open_questions",
     "review",
     "build_global_glossary",
     "build_interview_index",
@@ -349,14 +351,14 @@ class PipelineRunner:
             term_path = notebooklm_dir / "02-术语与定义.md"
             interview_path = notebooklm_dir / "03-面试问答.md"
             link_path = notebooklm_dir / "04-跨章关联.md"
-            if not (term_path.exists() and interview_path.exists() and link_path.exists()):
+            if not (term_path.exists() and link_path.exists()):
                 continue
             active_chapters.append(
                 {
                     "chapter_id": chapter_id,
                     "chapter_blueprint": chapter_blueprint,
                     "term_file": term_path.read_text(encoding="utf-8"),
-                    "interview_file": interview_path.read_text(encoding="utf-8"),
+                    "interview_file": interview_path.read_text(encoding="utf-8") if interview_path.exists() else "",
                     "link_file": link_path.read_text(encoding="utf-8"),
                 }
             )
