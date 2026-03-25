@@ -18,6 +18,7 @@ python -m processagent.cli run-course `
 - GUI 配置页的“启动 / 继续运行”就是这套语义，不表示总是 fresh run
 - `resume-course` 会继续同一个课程目录下已存在的 runtime，并从 `runtime_state.json` 的 `run_identity` 恢复冻结的流水线身份
 - 课程目录解析会先规范化 `book_title`（去掉前后空格）再生成 `course_id`；`build-global` / `resume-course` / `show-status` / `clean-course` 都按这条规则查已有课程
+- 无 TOC 时，`blueprint_builder` 只补章节结构；`course_name` 会继续锚定用户输入的 `book_title`，避免 LLM 改写标题后把 GUI/CLI 指向不同的 `course_id`
 - 新的 `run-course` 如果复用已有课程目录，会用当前配置重写 `runtime_state.run_identity`；只有 `resume-course` 才会显式沿用已冻结的流水线身份
 - 恢复时允许刷新：
   - `provider/backend`

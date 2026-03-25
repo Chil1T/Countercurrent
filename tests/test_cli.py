@@ -13,8 +13,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class _RecordingBlueprintBackend:
-    def __init__(self) -> None:
+    def __init__(self, course_name: str = "数据库系统概论") -> None:
         self.calls: list[dict[str, object]] = []
+        self.course_name = course_name
 
     def generate_json(
         self,
@@ -32,7 +33,7 @@ class _RecordingBlueprintBackend:
             }
         )
         return {
-            "course_name": "数据库系统概论",
+            "course_name": self.course_name,
             "chapters": [
                 {
                     "chapter_id": "第一章·绪论",
@@ -75,6 +76,33 @@ class CliTest(unittest.TestCase):
             self.assertEqual(blueprint["course_name"], "数据库系统概论")
             self.assertEqual(backend.calls[0]["agent_name"], "blueprint_builder")
             self.assertEqual(backend.calls[0]["model_override"], "gpt-5.4-mini-blueprint")
+
+    def test_build_blueprint_keeps_course_name_aligned_with_book_title_without_toc(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "captions"
+            input_dir.mkdir()
+            (input_dir / "第一章·绪论.md").write_text("数据库系统由数据库组成。", encoding="utf-8")
+
+            backend = _RecordingBlueprintBackend(course_name="数据库系统概论（第5版）课程精讲")
+
+            blueprint = _build_blueprint(
+                Namespace(
+                    input_dir=input_dir,
+                    book_title="数据库系统概论",
+                    toc_file=None,
+                    toc_text=None,
+                    author=None,
+                    edition=None,
+                    publisher=None,
+                    isbn=None,
+                    blueprint_builder_model="gpt-5.4-mini-blueprint",
+                ),
+                backend,
+            )
+
+            self.assertEqual(blueprint["course_name"], "数据库系统概论")
+            self.assertEqual(blueprint["course_id"], build_course_id("数据库系统概论"))
 
     def test_build_blueprint_subcommand_writes_course_blueprint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

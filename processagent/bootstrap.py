@@ -114,7 +114,7 @@ def bootstrap_course_blueprint(
             model_override=blueprint_builder_model,
         )
         blueprint = {
-            "course_name": response.get("course_name", metadata["title"]),
+            "course_name": metadata["title"],
             "source_type": "published_textbook",
             "book": metadata,
             "chapters": response.get("chapters", []),
