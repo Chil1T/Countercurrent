@@ -27,6 +27,11 @@ class ArtifactsApiTests(unittest.TestCase):
             json.dumps({"course_id": self.course_id, "last_error": None}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        (course_dir / "runtime").mkdir(parents=True, exist_ok=True)
+        (course_dir / "runtime" / "llm_calls.jsonl").write_text(
+            '{"stage":"gap_fill","input_tokens":10,"output_tokens":20}\n',
+            encoding="utf-8",
+        )
         (course_dir / "chapters" / "chapter-01" / "notebooklm" / "01-精讲.md").write_text(
             "# Chapter 01\n\nKnowledge pack preview.",
             encoding="utf-8",
@@ -55,6 +60,7 @@ class ArtifactsApiTests(unittest.TestCase):
         self.assertIn("course_blueprint.json", paths)
         self.assertIn("chapters/chapter-01/notebooklm/01-精讲.md", paths)
         self.assertIn("global/global_glossary.md", paths)
+        self.assertNotIn("runtime/llm_calls.jsonl", paths)
 
     def test_artifact_content_returns_markdown_preview(self) -> None:
         response = self.client.get(
@@ -76,6 +82,14 @@ class ArtifactsApiTests(unittest.TestCase):
         self.assertEqual(payload["report_count"], 1)
         self.assertEqual(payload["issue_count"], 1)
         self.assertEqual(payload["reports"][0]["path"], "chapters/chapter-01/review_report.json")
+
+    def test_artifact_content_hides_internal_llm_call_log(self) -> None:
+        response = self.client.get(
+            f"/courses/{self.course_id}/artifacts/content",
+            params={"path": "runtime/llm_calls.jsonl"},
+        )
+
+        self.assertEqual(response.status_code, 404)
 
     def test_review_summary_accepts_structured_issue_objects(self) -> None:
         course_dir = self.output_root / "courses" / self.course_id
@@ -116,6 +130,10 @@ class ArtifactsApiTests(unittest.TestCase):
         self.assertIn(f"{self.course_id}/course_blueprint.json", archive.namelist())
         self.assertIn(
             f"{self.course_id}/chapters/chapter-01/notebooklm/01-精讲.md",
+            archive.namelist(),
+        )
+        self.assertNotIn(
+            f"{self.course_id}/runtime/llm_calls.jsonl",
             archive.namelist(),
         )
 

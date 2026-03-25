@@ -8,6 +8,11 @@ from fastapi.testclient import TestClient
 
 from server.app.main import create_app
 from processagent.blueprint import build_course_id
+from server.app.adapters.gui_config_store import GuiConfigStore
+from server.app.adapters.input_storage import DraftInputStorage
+from server.app.adapters.runtime_reader import RuntimeStateReader
+from server.app.application.course_drafts import CourseDraftService
+from server.app.application.runs import RunService
 
 
 class StubRunner:
@@ -838,6 +843,34 @@ class RunsApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("event: run.log", body)
         self.assertIn("stage 2", body)
+
+    def test_get_run_log_chunk_marks_complete_when_run_is_terminal_without_log_file(self) -> None:
+        draft_id = self.client.post(
+            "/course-drafts",
+            json={
+                "book_title": "Computer Networks",
+                "subtitle_text": "# 第1章 绪论\n\n本节介绍网络分层。",
+            },
+        ).json()["id"]
+        run_payload = self.client.post("/runs", json={"draft_id": draft_id}).json()
+        run_id = run_payload["id"]
+        self.runner.snapshots[run_id] = {
+            "status": "completed",
+            "last_error": None,
+        }
+        service = RunService(
+            course_drafts=CourseDraftService(storage=DraftInputStorage(self.output_root)),
+            runner=self.runner,
+            runtime_reader=RuntimeStateReader(self.output_root),
+            output_root=self.output_root,
+            gui_config_store=GuiConfigStore(self.gui_config_path),
+        )
+
+        chunk = service.get_run_log_chunk(run_id, cursor=0)
+
+        self.assertIsNotNone(chunk)
+        self.assertEqual(chunk.content, "")
+        self.assertTrue(chunk.complete)
 
     def test_get_run_log_returns_log_preview_without_exposing_runner_path_contract(self) -> None:
         draft_id = self.client.post(

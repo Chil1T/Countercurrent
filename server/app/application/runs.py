@@ -252,13 +252,24 @@ class RunService:
 
         snapshot = self._runner.snapshot(run_id)
         runtime = self._runtime_reader.read(record.session.course_id)
+        status = self._resolve_status(record=record, snapshot=snapshot, runtime=runtime)
         log_path = self._resolve_log_path(run_id, snapshot)
         if not log_path:
-            return RunLogChunk(run_id=run_id, cursor=cursor, content="", complete=False)
+            return RunLogChunk(
+                run_id=run_id,
+                cursor=cursor,
+                content="",
+                complete=status in {"completed", "failed", "cleaned"},
+            )
 
         path = Path(log_path)
         if not path.exists() or path.is_dir():
-            return RunLogChunk(run_id=run_id, cursor=cursor, content="", complete=False)
+            return RunLogChunk(
+                run_id=run_id,
+                cursor=cursor,
+                content="",
+                complete=status in {"completed", "failed", "cleaned"},
+            )
 
         content = path.read_text(encoding="utf-8")
         next_cursor = min(max(cursor, 0), len(content))
@@ -267,7 +278,7 @@ class RunService:
             run_id=run_id,
             cursor=len(content),
             content=chunk,
-            complete=self._resolve_status(record=record, snapshot=snapshot, runtime=runtime) in {"completed", "failed", "cleaned"},
+            complete=status in {"completed", "failed", "cleaned"},
         )
 
     def _map_stages(

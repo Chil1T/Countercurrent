@@ -23,6 +23,8 @@ class ArtifactService:
             if path.is_dir():
                 continue
             relative = path.relative_to(course_dir).as_posix()
+            if not self._is_public_artifact(relative):
+                continue
             nodes.append(
                 {
                     "path": relative,
@@ -33,6 +35,8 @@ class ArtifactService:
         return {"course_id": course_id, "nodes": nodes}
 
     def read_content(self, course_id: str, relative_path: str) -> dict[str, str] | None:
+        if not self._is_public_artifact(relative_path):
+            return None
         path = self._safe_file_path(course_id, relative_path)
         if path is None or not path.exists() or path.is_dir():
             return None
@@ -98,7 +102,10 @@ class ArtifactService:
             for path in sorted(course_dir.rglob("*")):
                 if path.is_dir():
                     continue
-                archive.write(path, arcname=f"{course_id}/{path.relative_to(course_dir).as_posix()}")
+                relative = path.relative_to(course_dir).as_posix()
+                if not self._is_public_artifact(relative):
+                    continue
+                archive.write(path, arcname=f"{course_id}/{relative}")
         return (f"{course_id}.zip", buffer.getvalue())
 
     def _course_dir(self, course_id: str) -> Path:
@@ -110,6 +117,10 @@ class ArtifactService:
         if target == course_dir or course_dir not in target.parents:
             return None
         return target
+
+    @staticmethod
+    def _is_public_artifact(relative_path: str) -> bool:
+        return relative_path != "runtime/llm_calls.jsonl"
 
     @staticmethod
     def _detect_kind(path: Path) -> str:
