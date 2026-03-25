@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Databaseleaning GUI",
-  description: "Web product shell for the databaseleaning blueprint-first pipeline.",
+  title: "Countercurrent",
+  description: "Web product shell for the Countercurrent blueprint-first pipeline.",
 };
 
 export default function RootLayout({
