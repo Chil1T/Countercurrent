@@ -203,6 +203,27 @@ class CourseDraftApiTests(unittest.TestCase):
         self.assertTrue((input_dir / "chapter-01-intro.md").exists())
         self.assertTrue((input_dir / "chapter-02-clock.md").exists())
 
+    def test_create_course_draft_rejects_duplicate_subtitle_filenames_after_normalization(self) -> None:
+        response = self.client.post(
+            "/course-drafts",
+            json={
+                "book_title": "Distributed Systems",
+                "subtitle_assets": [
+                    {
+                        "filename": "week1/chapter-01.md",
+                        "content": "# 第1章 导论\n\n介绍系统模型。",
+                    },
+                    {
+                        "filename": "chapter-01.md",
+                        "content": "# 第1章 补充\n\n重复文件名。",
+                    },
+                ],
+            },
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("Duplicate subtitle filename", response.json()["detail"])
+
     def test_create_course_draft_accepts_multipart_subtitle_uploads(self) -> None:
         response = self.client.post(
             "/course-drafts",

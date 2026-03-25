@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
+from server.app.adapters.input_storage import DuplicateSubtitleFilenameError
 from server.app.application.course_drafts import CourseDraftService
 from server.app.models.course_draft import CourseDraft, CreateCourseDraftRequest, SubtitleAssetInput
 
@@ -21,7 +22,10 @@ def build_course_drafts_router(service: CourseDraftService) -> APIRouter:
                 payload = CreateCourseDraftRequest.model_validate(await request.json())
         except ValidationError as exc:
             raise RequestValidationError(exc.errors()) from exc
-        return service.create_draft(payload)
+        try:
+            return service.create_draft(payload)
+        except DuplicateSubtitleFilenameError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     @router.get("/course-drafts/{draft_id}", response_model=CourseDraft)
     def get_course_draft(draft_id: str) -> CourseDraft:

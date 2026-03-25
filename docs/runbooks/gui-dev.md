@@ -31,6 +31,8 @@ out/_gui/drafts/<draft_id>/input/chapter-01.md
 
 `RunService` 只有在该输入目录存在至少一个 `.md` transcript 时，才会允许创建或恢复运行。
 
+多字幕输入当前还要求文件名在规范化后保持唯一；如果两个上传文件在去掉路径并标准化后落到同一文件名，API 会直接拒绝草稿创建，而不是静默覆盖其一。
+
 ## Run State Model
 
 GUI 运行页当前采用下面这组产品状态：
@@ -161,6 +163,7 @@ GUI 当前采用两层模型路由：
   - 单章 stage 串行
   - active writers 串行
 - provider 压力主要来自 hosted writer/review/global 阶段，以及多 run 并发，不来自单次 run 内部 fan-out
+- 同一个 `course_id` 当前只允许一个活跃 run；当某门课已有 `running` 的章节 run 或 global run 时，GUI/API 会拒绝为该课程再启动新的 run，避免并发写坏同一份 `out/courses/<course_id>` runtime。
 
 ## Writer Profile
 
@@ -384,6 +387,7 @@ out/_gui/frontend-dev.log
 - `build-blueprint` / `run-course` 当前会把 `simple_model` 中映射给 `blueprint_builder` 的 override 直接用于 blueprint 生成阶段，不再回落到 provider 默认模型。
 - 如果草稿尚未保存模板配置，GUI 运行默认按 `interview_knowledge_base` 解释章节 writer 集合与阶段轨道，不再错误回落到 `standard_knowledge_pack`。
 - `clean-course` 如果在运行中遇到后端重启，状态恢复会优先依据课程 runtime 目录是否已删除来判断 `cleaned`，避免清理完成后仍长期显示 `running`。
+- 运行状态恢复当前会以 `runtime_state.json` 里的实际 chapter scopes 为准，而不是 blueprint 中声明的章节总数；当 TOC 章节数和实际输入章节数不一致时，重启后也不会因为完成计数永远达不到 blueprint 总数而卡在 `running`。
 - `content_density` 和 `export ZIP` 仍然是产品层配置，还没有进入 `run-course` 的 runtime contract。
 - checkpoint 有效性现在同时受 `blueprint_hash` 和 pipeline signature 约束；当 pipeline/runtime contract 变更时，旧产物会在下一次运行时自动失效并重跑。
 - 同课程名当前继续复用同一 `course_id`；新章节会追加到同一课程目录。

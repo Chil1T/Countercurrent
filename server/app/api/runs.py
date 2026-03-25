@@ -21,6 +21,8 @@ def build_runs_router(service: RunService) -> APIRouter:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except RunConfigurationError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except RunConflictError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         if run is None:
             raise HTTPException(status_code=404, detail="Course draft not found")
         return run

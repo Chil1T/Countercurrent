@@ -27,7 +27,7 @@ class RuntimeStateReader:
 
         blueprint = json.loads(blueprint_path.read_text(encoding="utf-8"))
         runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
-        chapters = blueprint.get("chapters", [])
+        runtime_chapters = runtime.get("chapters", {})
         completed_steps = {
             "ingest": 0,
             "curriculum_anchor": 0,
@@ -41,14 +41,14 @@ class RuntimeStateReader:
             "review": 0,
         }
 
-        for chapter_state in runtime.get("chapters", {}).values():
+        for chapter_state in runtime_chapters.values():
             steps = chapter_state.get("steps", {})
             for step_name in completed_steps:
                 if steps.get(step_name, {}).get("status") == "completed":
                     completed_steps[step_name] += 1
 
         return RuntimeSnapshot(
-            chapter_count=len(chapters),
+            chapter_count=len(runtime_chapters),
             completed_steps=completed_steps,
             blueprint_ready=True,
             global_steps={

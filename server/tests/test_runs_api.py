@@ -108,6 +108,30 @@ class RunsApiTests(unittest.TestCase):
         self.assertEqual(self.runner.started_specs[0]["target_output"], "interview_knowledge_base")
         self.assertTrue(self.runner.started_specs[0]["input_dir"].endswith(f"{draft_payload['id']}\\input"))
 
+    def test_create_run_rejects_parallel_run_for_same_course_output(self) -> None:
+        first_draft = self.client.post(
+            "/course-drafts",
+            json={
+                "book_title": "Computer Networks",
+                "subtitle_text": "# 第1章 绪论\n\n本节介绍网络分层。",
+            },
+        ).json()
+        second_draft = self.client.post(
+            "/course-drafts",
+            json={
+                "book_title": "Computer Networks",
+                "subtitle_text": "# 第2章 传输层\n\n本节介绍端到端通信。",
+            },
+        ).json()
+
+        first_response = self.client.post("/runs", json={"draft_id": first_draft["id"]})
+        second_response = self.client.post("/runs", json={"draft_id": second_draft["id"]})
+
+        self.assertEqual(first_response.status_code, 201)
+        self.assertEqual(second_response.status_code, 409)
+        self.assertIn("already in progress", second_response.json()["detail"])
+        self.assertEqual(len(self.runner.started_specs), 1)
+
     def test_create_run_maps_saved_template_config_into_runner_spec(self) -> None:
         draft_payload = self.client.post(
             "/course-drafts",
@@ -1007,3 +1031,68 @@ class RunsApiTests(unittest.TestCase):
         self.assertEqual(payload["backend"], "openai")
         self.assertEqual(payload["simple_model"], "gpt-5.4-mini")
         self.assertEqual(payload["complex_model"], "gpt-5.4")
+
+    def test_get_run_uses_runtime_chapter_scopes_for_completion_after_restart(self) -> None:
+        draft_payload = self.client.post(
+            "/course-drafts",
+            json={
+                "book_title": "Computer Networks",
+                "subtitle_text": "# 第1章 绪论\n\n本节介绍网络分层。",
+            },
+        ).json()
+        run_payload = self.client.post("/runs", json={"draft_id": draft_payload["id"]}).json()
+        run_id = run_payload["id"]
+        course_id = run_payload["course_id"]
+
+        course_dir = self.output_root / "courses" / course_id
+        course_dir.mkdir(parents=True, exist_ok=True)
+        (course_dir / "course_blueprint.json").write_text(
+            json.dumps(
+                {
+                    "course_id": course_id,
+                    "course_name": "Computer Networks",
+                    "chapters": [
+                        {"chapter_id": "chapter-01", "title": "chapter-01"},
+                        {"chapter_id": "chapter-02", "title": "chapter-02"},
+                    ],
+                    "policy": {"target_output": "interview_knowledge_base", "review_mode": "light"},
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        (course_dir / "runtime_state.json").write_text(
+            json.dumps(
+                {
+                    "course_id": course_id,
+                    "blueprint_hash": "hash",
+                    "chapters": {
+                        "chapter-01": {
+                            "steps": {
+                                "ingest": {"status": "completed"},
+                                "curriculum_anchor": {"status": "completed"},
+                                "gap_fill": {"status": "completed"},
+                                "pack_plan": {"status": "completed"},
+                                "write_lecture_note": {"status": "completed"},
+                                "write_terms": {"status": "completed"},
+                                "write_interview_qa": {"status": "completed"},
+                                "write_cross_links": {"status": "completed"},
+                            }
+                        }
+                    },
+                    "global": {},
+                    "last_error": None,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        restarted_client = TestClient(create_app(output_root=self.output_root, run_runner=StubRunner()))
+
+        response = restarted_client.get(f"/runs/{run_id}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "completed")

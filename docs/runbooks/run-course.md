@@ -74,6 +74,7 @@ GUI 侧在进入 CLI 前还会先做一层解析：
 - `review` 当前默认关闭；只有显式传 `--enable-review` 时才会执行 reviewer
 - `quarantine` 机制已移除；章节产物始终保留在 `chapters/` 下
 - `global/*` 当前不是章节主流程的一部分；只通过 `build-global` 手动触发
+- 对同一个 `course_id`，当前 orchestration 只允许一个活跃 run；无论章节主流程还是 `build-global`，如果已有 `running` run 占用同一课程输出目录，就应先拒绝新 run，避免并发写坏 `runtime_state.json` 和 checkpoint
 - GUI 当前只把两类配置接入 runtime：
   - `provider/backend`
   - `base_url`
@@ -87,6 +88,7 @@ GUI 侧在进入 CLI 前还会先做一层解析：
 - 当 GUI 草稿还没有保存课程模板配置时，运行时默认按 `interview_knowledge_base` 解释 active writers 与阶段轨道，保持和 pipeline blueprint 默认值一致
 - checkpoint 是否有效不能只看文件存在；当前实现还会校验 step 记录里的 pipeline signature，避免 pipeline 行为变了但旧产物被误当成可复用
 - 当前 GUI/provider 配置问题，优先按 `docs/runbooks/gui-dev.md` 的 GUI 语义解释，再回到这里核对 CLI/runtime contract
+- 对 GUI draft 输入，字幕文件名在规范化后必须唯一；如果两个上传项最终会写到同一个 `input/<filename>.md`，adapter 应拒绝而不是静默覆盖
 
 ## Current Stage Contract
 

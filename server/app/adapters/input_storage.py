@@ -7,6 +7,10 @@ from pathlib import Path
 from server.app.models.course_draft import CourseDraft, SubtitleAssetInput
 
 
+class DuplicateSubtitleFilenameError(ValueError):
+    pass
+
+
 class DraftInputStorage:
     def __init__(self, output_root: Path) -> None:
         self._drafts_root = output_root / "_gui" / "drafts"
@@ -27,10 +31,15 @@ class DraftInputStorage:
         input_dir.mkdir(parents=True, exist_ok=True)
 
         paths: list[Path] = []
+        seen_filenames: set[str] = set()
         for index, asset in enumerate(assets, start=1):
             filename = Path(asset.filename.strip() or f"chapter-{index:02d}.md").name
             if not filename.endswith(".md"):
                 filename = f"{filename}.md"
+            normalized_key = filename.lower()
+            if normalized_key in seen_filenames:
+                raise DuplicateSubtitleFilenameError(f"Duplicate subtitle filename: {filename}")
+            seen_filenames.add(normalized_key)
             target = input_dir / filename
             target.write_text(asset.content, encoding="utf-8")
             paths.append(target)

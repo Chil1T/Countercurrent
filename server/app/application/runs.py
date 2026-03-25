@@ -94,6 +94,7 @@ class RunService:
         draft = self._course_drafts.get_draft(request.draft_id)
         if draft is None:
             return None
+        self._ensure_course_idle(draft.course_id)
 
         runtime_config = self._resolve_runtime_config(draft)
         review_mode, target_output, default_review_enabled = self._resolve_runtime_policy(draft)
@@ -390,6 +391,26 @@ class RunService:
         snapshot = self._runner.snapshot(run_id)
         if self._snapshot_value(snapshot, "status") == "running":
             raise RunConflictError("Run is already in progress")
+
+    def _ensure_course_idle(self, course_id: str) -> None:
+        for record in self._iter_records():
+            if record.session.course_id != course_id:
+                continue
+            run = self.get_run(record.session.id)
+            if run is not None and run.status == "running":
+                raise RunConflictError(f"Run already in progress for course: {course_id}")
+
+    def _iter_records(self) -> list[_RunRecord]:
+        records: dict[str, _RunRecord] = dict(self._runs)
+        if self._run_state_root.exists():
+            for path in self._run_state_root.glob("*/session.json"):
+                run_id = path.parent.name
+                if run_id in records:
+                    continue
+                record = self._load_record(run_id)
+                if record is not None:
+                    records[run_id] = record
+        return list(records.values())
 
     def _start_process(
         self,
