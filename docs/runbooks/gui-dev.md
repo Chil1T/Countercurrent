@@ -175,6 +175,7 @@ GUI 当前采用两层模型路由：
   - `write_terms`
   - `write_interview_qa`
   - `write_cross_links`
+  - `write_open_questions`
 - `interview-focus`
   - `write_lecture_note`
   - `write_terms`
@@ -361,9 +362,11 @@ out/_gui/frontend-dev.log
 - 运行页右侧已接入日志面板：先拉取 log preview，再通过 `run.log` 事件流增量追加。
 - 运行页摘要卡现在会明确显示 `backend`、`hosted/heuristic`、`simple_model`、`complex_model`、`review_mode`、`target_output`，用于区分“页面已打开”和“runtime 实际采用的配置”。
 - `RunSession` 当前会持久化到 `out/_gui/runs/<run_id>/session.json`，后端重启后，已存在的 run 页面不再直接因内存态丢失而 404。
+- 历史 run 的 `process.log` 当前也支持在后端重启后恢复读取；日志面板不再依赖 runner 的内存 snapshot 才能显示旧日志。
 - `runtime_state.json` 当前会额外持久化 `run_identity`，用于恢复时锁定 `review_enabled`、`review_mode` 和 `target_output`。
 - 结果页已接通 artifacts tree、文件预览、review 摘要和 ZIP 导出。
 - 结果页文件树当前按 `章节 -> 最终产物 / 中间数据 -> 文件` 分层；若对应 run 尚未完成，会显示“文件仍在生成中”的提示，而不是把空树误判为失败。
+- 如果结果页在 run 仍未完成时已经打开，artifact tree 与 review summary 当前会在 `run.update` 推进时自动刷新，不需要手动刷新页面。
 - FastAPI 默认以仓库根目录推导 `workspace_root` 与 `out/`，结果页不再依赖 uvicorn 是从哪个当前目录启动的。
 - 左侧 `运行` / `结果` 导航和首页入口不再使用 `demo` 占位路由；只有真实 `run_id` / `course_id` 已绑定时才会启用对应入口。
 - 当从运行页或结果页返回输入/配置页时，shell 现在会继续保留 `draftId/runId/courseId`，避免 sidebar 把 `运行` / `结果` 重新打回 `pending`。
@@ -377,6 +380,7 @@ out/_gui/frontend-dev.log
   - `review_enabled`
   - `template` -> `policy.target_output`
   - `review_mode` -> `policy.review_mode`
+- `build-blueprint` / `run-course` 当前会把 `simple_model` 中映射给 `blueprint_builder` 的 override 直接用于 blueprint 生成阶段，不再回落到 provider 默认模型。
 - `content_density` 和 `export ZIP` 仍然是产品层配置，还没有进入 `run-course` 的 runtime contract。
 - checkpoint 有效性现在同时受 `blueprint_hash` 和 pipeline signature 约束；当 pipeline/runtime contract 变更时，旧产物会在下一次运行时自动失效并重跑。
 - 同课程名当前继续复用同一 `course_id`；新章节会追加到同一课程目录。

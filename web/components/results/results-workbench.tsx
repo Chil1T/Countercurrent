@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   buildExportUrl,
@@ -12,6 +12,7 @@ import {
   type ReviewSummary,
 } from "@/lib/api/artifacts";
 import { getRun, subscribeRunEvents, type RunSession } from "@/lib/api/runs";
+import { shouldRefreshArtifactsOnRunUpdate } from "@/lib/results-refresh";
 import {
   getArtifactDisplayName,
   getArtifactTreeCardClass,
@@ -70,6 +71,15 @@ function getTreePathAncestors(path: string): string[] {
   }
 
   return ["runtime"];
+}
+
+async function loadArtifactSnapshot(courseId: string, runId?: string | null) {
+  const [tree, summary, nextRun] = await Promise.all([
+    getArtifactTree(courseId),
+    getReviewSummary(courseId),
+    runId ? getRun(runId).catch(() => null) : Promise.resolve(null),
+  ]);
+  return { tree, summary, nextRun };
 }
 
 function TreeNode({
@@ -138,30 +148,38 @@ export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?
   const [reviewSummary, setReviewSummary] = useState<ReviewSummary | null>(null);
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
+  const previousRunRef = useRef<RunSession | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
-    async function loadArtifacts() {
+    async function refreshArtifacts(preserveSelection: boolean) {
       setError(null);
       try {
-        const [tree, summary, nextRun] = await Promise.all([
-          getArtifactTree(courseId),
-          getReviewSummary(courseId),
-          runId ? getRun(runId).catch(() => null) : Promise.resolve(null),
-        ]);
+        const { tree, summary, nextRun } = await loadArtifactSnapshot(courseId, runId);
         if (cancelled) {
           return;
         }
         setNodes(tree.nodes);
         setReviewSummary(summary);
         setRun(nextRun);
+        previousRunRef.current = nextRun;
 
         const nextTree = buildArtifactTree(tree.nodes);
         const firstPreviewable = findFirstSelectablePath(nextTree) ?? null;
         const nextExpandedKeys = new Set(collectTreeSectionKeys(nextTree));
-        setExpandedKeys(nextExpandedKeys);
-        setSelectedPath(firstPreviewable);
+        setExpandedKeys((current) => {
+          if (!preserveSelection) {
+            return nextExpandedKeys;
+          }
+          return new Set([...current, ...nextExpandedKeys]);
+        });
+        setSelectedPath((current) => {
+          if (!preserveSelection || !current) {
+            return firstPreviewable;
+          }
+          return findNodeByPath(nextTree, current) ? current : firstPreviewable;
+        });
       } catch (loadError) {
         if (!cancelled) {
           setError(loadError instanceof Error ? loadError.message : "Unknown error");
@@ -169,7 +187,7 @@ export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?
       }
     }
 
-    void loadArtifacts();
+    void refreshArtifacts(false);
 
     return () => {
       cancelled = true;
@@ -187,7 +205,34 @@ export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?
     const unsubscribe = subscribeRunEvents(runId, {
       onUpdate: (nextRun) => {
         if (!cancelled) {
+          if (shouldRefreshArtifactsOnRunUpdate(previousRunRef.current, nextRun)) {
+            void loadArtifactSnapshot(courseId, runId)
+              .then(({ tree, summary }) => {
+                if (cancelled) {
+                  return;
+                }
+                setNodes(tree.nodes);
+                setReviewSummary(summary);
+
+                const nextTree = buildArtifactTree(tree.nodes);
+                const firstPreviewable = findFirstSelectablePath(nextTree) ?? null;
+                const nextExpandedKeys = new Set(collectTreeSectionKeys(nextTree));
+                setExpandedKeys((current) => new Set([...current, ...nextExpandedKeys]));
+                setSelectedPath((current) => {
+                  if (!current) {
+                    return firstPreviewable;
+                  }
+                  return findNodeByPath(nextTree, current) ? current : firstPreviewable;
+                });
+              })
+              .catch((loadError) => {
+                if (!cancelled) {
+                  setError(loadError instanceof Error ? loadError.message : "Unknown error");
+                }
+              });
+          }
           setRun(nextRun);
+          previousRunRef.current = nextRun;
         }
       },
     });
@@ -196,7 +241,7 @@ export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?
       cancelled = true;
       unsubscribe();
     };
-  }, [runId]);
+  }, [courseId, runId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -379,4 +424,19 @@ export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?
       </div>
     </section>
   );
+}
+
+function findNodeByPath(nodes: ArtifactTreeNode[], path: string): ArtifactTreeNode | null {
+  for (const node of nodes) {
+    if ("path" in node && node.path === path) {
+      return node;
+    }
+    if ("children" in node) {
+      const child = findNodeByPath(node.children, path);
+      if (child) {
+        return child;
+      }
+    }
+  }
+  return null;
 }

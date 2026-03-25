@@ -3,14 +3,79 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
 
 from processagent.blueprint import build_course_id
+from processagent.cli import _build_blueprint
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+class _RecordingBlueprintBackend:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def generate_json(
+        self,
+        agent_name: str,
+        prompt: str,
+        payload: dict[str, object],
+        model_override: str | None = None,
+    ) -> dict[str, object]:
+        self.calls.append(
+            {
+                "agent_name": agent_name,
+                "prompt": prompt,
+                "payload": payload,
+                "model_override": model_override,
+            }
+        )
+        return {
+            "course_name": "数据库系统概论",
+            "chapters": [
+                {
+                    "chapter_id": "第一章·绪论",
+                    "title": "绪论",
+                    "aliases": ["第一章·绪论"],
+                    "expected_topics": [],
+                }
+            ],
+            "provenance": {
+                "chapter_structure": {"strategy": "llm_completed"},
+            },
+        }
+
+
 class CliTest(unittest.TestCase):
+    def test_build_blueprint_applies_blueprint_builder_model_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "captions"
+            input_dir.mkdir()
+            (input_dir / "第一章·绪论.md").write_text("数据库系统由数据库组成。", encoding="utf-8")
+
+            backend = _RecordingBlueprintBackend()
+
+            blueprint = _build_blueprint(
+                Namespace(
+                    input_dir=input_dir,
+                    book_title="数据库系统概论",
+                    toc_file=None,
+                    toc_text=None,
+                    author=None,
+                    edition=None,
+                    publisher=None,
+                    isbn=None,
+                    blueprint_builder_model="gpt-5.4-mini-blueprint",
+                ),
+                backend,
+            )
+
+            self.assertEqual(blueprint["course_name"], "数据库系统概论")
+            self.assertEqual(backend.calls[0]["agent_name"], "blueprint_builder")
+            self.assertEqual(backend.calls[0]["model_override"], "gpt-5.4-mini-blueprint")
+
     def test_build_blueprint_subcommand_writes_course_blueprint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

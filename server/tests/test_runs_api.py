@@ -504,6 +504,33 @@ class RunsApiTests(unittest.TestCase):
         self.assertEqual(response.json()["id"], run_id)
         self.assertEqual(replacement_runner.started_specs[-1]["command"], "resume-course")
 
+    def test_get_run_log_restores_persisted_record_and_process_log_after_restart(self) -> None:
+        draft_id = self.client.post(
+            "/course-drafts",
+            json={
+                "book_title": "Computer Networks",
+                "subtitle_text": "# 第1章 绪论\n\n本节介绍网络分层。",
+            },
+        ).json()["id"]
+        run_payload = self.client.post("/runs", json={"draft_id": draft_id}).json()
+        run_id = run_payload["id"]
+
+        log_path = self.output_root / "_gui" / "runs" / run_id / "process.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("line one\nline two\n", encoding="utf-8")
+
+        restart_client = TestClient(
+            create_app(output_root=self.output_root, run_runner=StubRunner(), gui_config_path=self.gui_config_path)
+        )
+
+        response = restart_client.get(f"/runs/{run_id}/log")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["available"])
+        self.assertEqual(payload["content"], "line one\nline two\n")
+        self.assertEqual(payload["cursor"], len("line one\nline two\n"))
+
     def test_resume_run_refreshes_provider_routing_but_keeps_frozen_pipeline_identity(self) -> None:
         self.client.put(
             "/gui-runtime-config",

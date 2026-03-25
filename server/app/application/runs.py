@@ -219,12 +219,13 @@ class RunService:
         return updated
 
     def get_run_log(self, run_id: str, max_chars: int = 4000) -> RunLogPreview | None:
-        record = self._runs.get(run_id)
+        record = self._runs.get(run_id) or self._load_record(run_id)
         if record is None:
             return None
+        self._runs[run_id] = record
 
         snapshot = self._runner.snapshot(run_id)
-        log_path = self._snapshot_value(snapshot, "log_path")
+        log_path = self._resolve_log_path(run_id, snapshot)
         if not log_path:
             return RunLogPreview(run_id=run_id, available=False, cursor=0, content="", truncated=False)
 
@@ -244,13 +245,14 @@ class RunService:
         )
 
     def get_run_log_chunk(self, run_id: str, cursor: int = 0) -> RunLogChunk | None:
-        record = self._runs.get(run_id)
+        record = self._runs.get(run_id) or self._load_record(run_id)
         if record is None:
             return None
+        self._runs[run_id] = record
 
         snapshot = self._runner.snapshot(run_id)
         runtime = self._runtime_reader.read(record.session.course_id)
-        log_path = self._snapshot_value(snapshot, "log_path")
+        log_path = self._resolve_log_path(run_id, snapshot)
         if not log_path:
             return RunLogChunk(run_id=run_id, cursor=cursor, content="", complete=False)
 
@@ -315,6 +317,15 @@ class RunService:
         if isinstance(snapshot, dict):
             return snapshot.get(key)
         return getattr(snapshot, key, None)
+
+    def _resolve_log_path(self, run_id: str, snapshot) -> Path | None:
+        log_path = self._snapshot_value(snapshot, "log_path")
+        if log_path:
+            return Path(log_path)
+        fallback_path = self._record_path(run_id).parent / "process.log"
+        if fallback_path.exists() and fallback_path.is_file():
+            return fallback_path
+        return None
 
     def _resolve_status(self, record: _RunRecord, snapshot, runtime: RuntimeSnapshot | None) -> str:
         runner_status = self._snapshot_value(snapshot, "status")

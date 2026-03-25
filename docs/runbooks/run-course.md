@@ -134,6 +134,7 @@ GUI 侧在进入 CLI 前还会先做一层解析：
   - `write_terms`
   - `write_interview_qa`
   - `write_cross_links`
+  - `write_open_questions`
 - `interview_knowledge_base`
   - `write_lecture_note`
   - `write_terms`
@@ -163,6 +164,7 @@ GUI 当前把两层模型路由映射到 CLI/runtime 的方式是：
 - GUI 当前仍沿用 CLI 的旧 stage model flag 名：
   - `compose_pack_model` 实际覆盖 `pack_plan + active writers`
   - `canonicalize_model` 实际覆盖 `build_global_glossary + build_interview_index`
+- `build-blueprint`、`bootstrap-course` 与 `run-course` 当前都会把 `--blueprint-builder-model` 真实传给 `blueprint_builder`，不再默认回落到 provider 默认模型
 - 这是兼容层，不表示 runtime 仍然存在单体 `compose_pack` 或 `canonicalize` stage
 
 ## Internal Token Accountability
@@ -190,6 +192,7 @@ out/courses/<course_id>/runtime/llm_calls.jsonl
 
 - 这份日志只用于内部调试和追责，不面向 GUI 用户展示
 - hosted backend 优先记录 provider usage；如果 provider 不返回 usage，则回退为本地估算值
+- `RunService` 在后端重启后会优先从 `out/_gui/runs/<run_id>/session.json` 与 `process.log` 恢复历史日志，`/runs/{id}/log` 不再依赖 runner 进程内存快照
 
 ## Provider Pressure And Concurrency
 
