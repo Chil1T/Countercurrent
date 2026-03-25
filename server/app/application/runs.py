@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -89,102 +90,109 @@ class RunService:
         self._gui_config_store = gui_config_store
         self._run_state_root = output_root / "_gui" / "runs"
         self._runs: dict[str, _RunRecord] = {}
+        self._course_locks: dict[str, threading.Lock] = {}
+        self._course_locks_guard = threading.Lock()
 
     def create_run(self, request: CreateRunRequest) -> RunSession | None:
         draft = self._course_drafts.get_draft(request.draft_id)
         if draft is None:
             return None
-        self._ensure_course_idle(draft.course_id)
+        with self._course_lock(draft.course_id):
+            self._ensure_course_idle(draft.course_id)
 
-        runtime_config = self._resolve_runtime_config(draft)
-        review_mode, target_output, default_review_enabled = self._resolve_runtime_policy(draft)
-        review_enabled = request.review_enabled if request.review_enabled is not None else default_review_enabled
-        run_kind = request.run_kind
-        command: Literal["run-course", "build-global"] = "build-global" if run_kind == "global" else "run-course"
-        input_dir = None
-        if run_kind == "chapter":
-            input_dir = self._course_drafts.get_runtime_input_dir(request.draft_id)
-            if input_dir is None:
-                raise DraftNotReadyError("Course draft is not ready to run")
+            runtime_config = self._resolve_runtime_config(draft)
+            review_mode, target_output, default_review_enabled = self._resolve_runtime_policy(draft)
+            review_enabled = request.review_enabled if request.review_enabled is not None else default_review_enabled
+            run_kind = request.run_kind
+            command: Literal["run-course", "build-global"] = "build-global" if run_kind == "global" else "run-course"
+            input_dir = None
+            if run_kind == "chapter":
+                input_dir = self._course_drafts.get_runtime_input_dir(request.draft_id)
+                if input_dir is None:
+                    raise DraftNotReadyError("Course draft is not ready to run")
 
-        session = RunSession(
-            id=f"run-{uuid4().hex[:8]}",
-            draft_id=draft.id,
-            course_id=draft.course_id,
-            status="created",
-            run_kind=run_kind,
-            backend=runtime_config.backend,
-            hosted=runtime_config.hosted,
-            base_url=runtime_config.base_url,
-            simple_model=runtime_config.simple_model,
-            complex_model=runtime_config.complex_model,
-            timeout_seconds=runtime_config.timeout_seconds,
-            target_output=target_output,
-            review_enabled=review_enabled if run_kind == "chapter" else False,
-            review_mode=review_mode,
-            stages=[
-                StageStatus(name=name, status="pending")
-                for name in _stage_names_for(
-                    run_kind,
-                    review_enabled if run_kind == "chapter" else False,
-                    target_output,
-                )
-            ],
-            last_error=None,
-        )
-        self._runs[session.id] = _RunRecord(session=session, last_command=command)
-        self._start_process(record=self._runs[session.id], command=command, book_title=draft.book_title, input_dir=input_dir)
-        self._persist_record(self._runs[session.id])
-        return self.get_run(session.id)
+            session = RunSession(
+                id=f"run-{uuid4().hex[:8]}",
+                draft_id=draft.id,
+                course_id=draft.course_id,
+                status="created",
+                run_kind=run_kind,
+                backend=runtime_config.backend,
+                hosted=runtime_config.hosted,
+                base_url=runtime_config.base_url,
+                simple_model=runtime_config.simple_model,
+                complex_model=runtime_config.complex_model,
+                timeout_seconds=runtime_config.timeout_seconds,
+                target_output=target_output,
+                review_enabled=review_enabled if run_kind == "chapter" else False,
+                review_mode=review_mode,
+                stages=[
+                    StageStatus(name=name, status="pending")
+                    for name in _stage_names_for(
+                        run_kind,
+                        review_enabled if run_kind == "chapter" else False,
+                        target_output,
+                    )
+                ],
+                last_error=None,
+            )
+            self._runs[session.id] = _RunRecord(session=session, last_command=command)
+            self._start_process(record=self._runs[session.id], command=command, book_title=draft.book_title, input_dir=input_dir)
+            self._persist_record(self._runs[session.id])
+            return self.get_run(session.id)
 
     def resume_run(self, run_id: str) -> RunSession | None:
         record = self._runs.get(run_id) or self._load_record(run_id)
         if record is None:
             return None
         self._runs[run_id] = record
-        self._ensure_mutable(record.session.id)
         draft = self._course_drafts.get_draft(record.session.draft_id)
         if draft is None:
             return None
-        runtime_config = self._resolve_runtime_config(draft)
-        record.session = record.session.model_copy(
-            update={
-                "backend": runtime_config.backend,
-                "hosted": runtime_config.hosted,
-                "base_url": runtime_config.base_url,
-                "simple_model": runtime_config.simple_model,
-                "complex_model": runtime_config.complex_model,
-                "timeout_seconds": runtime_config.timeout_seconds,
-                "last_error": None,
-            }
-        )
-        input_dir = None
-        command: Literal["resume-course", "build-global"] = "resume-course"
-        if record.session.run_kind == "chapter":
-            input_dir = self._course_drafts.get_runtime_input_dir(record.session.draft_id)
-            if input_dir is None:
-                raise DraftNotReadyError("Course draft is not ready to run")
-        else:
-            command = "build-global"
-        self._start_process(record=record, command=command, book_title=draft.book_title, input_dir=input_dir)
-        self._persist_record(record)
-        return self.get_run(run_id)
+        with self._course_lock(record.session.course_id):
+            self._ensure_mutable(record.session.id)
+            self._ensure_course_idle(record.session.course_id, exclude_run_id=run_id)
+            runtime_config = self._resolve_runtime_config(draft)
+            record.session = record.session.model_copy(
+                update={
+                    "backend": runtime_config.backend,
+                    "hosted": runtime_config.hosted,
+                    "base_url": runtime_config.base_url,
+                    "simple_model": runtime_config.simple_model,
+                    "complex_model": runtime_config.complex_model,
+                    "timeout_seconds": runtime_config.timeout_seconds,
+                    "last_error": None,
+                }
+            )
+            input_dir = None
+            command: Literal["resume-course", "build-global"] = "resume-course"
+            if record.session.run_kind == "chapter":
+                input_dir = self._course_drafts.get_runtime_input_dir(record.session.draft_id)
+                if input_dir is None:
+                    raise DraftNotReadyError("Course draft is not ready to run")
+            else:
+                command = "build-global"
+            self._start_process(record=record, command=command, book_title=draft.book_title, input_dir=input_dir)
+            self._persist_record(record)
+            return self.get_run(run_id)
 
     def clean_run(self, run_id: str) -> RunSession | None:
         record = self._runs.get(run_id) or self._load_record(run_id)
         if record is None:
             return None
         self._runs[run_id] = record
-        self._ensure_mutable(record.session.id)
         draft = self._course_drafts.get_draft(record.session.draft_id)
         if draft is None:
             return None
-        input_dir = self._course_drafts.get_runtime_input_dir(record.session.draft_id) or self._course_drafts.storage_input_dir(
-            record.session.draft_id
-        )
-        self._start_process(record=record, command="clean-course", book_title=draft.book_title, input_dir=input_dir)
-        self._persist_record(record)
-        return self.get_run(run_id)
+        with self._course_lock(record.session.course_id):
+            self._ensure_mutable(record.session.id)
+            self._ensure_course_idle(record.session.course_id, exclude_run_id=run_id)
+            input_dir = self._course_drafts.get_runtime_input_dir(record.session.draft_id) or self._course_drafts.storage_input_dir(
+                record.session.draft_id
+            )
+            self._start_process(record=record, command="clean-course", book_title=draft.book_title, input_dir=input_dir)
+            self._persist_record(record)
+            return self.get_run(run_id)
 
     def get_run(self, run_id: str) -> RunSession | None:
         record = self._runs.get(run_id) or self._load_record(run_id)
@@ -392,13 +400,23 @@ class RunService:
         if self._snapshot_value(snapshot, "status") == "running":
             raise RunConflictError("Run is already in progress")
 
-    def _ensure_course_idle(self, course_id: str) -> None:
+    def _ensure_course_idle(self, course_id: str, exclude_run_id: str | None = None) -> None:
         for record in self._iter_records():
+            if exclude_run_id is not None and record.session.id == exclude_run_id:
+                continue
             if record.session.course_id != course_id:
                 continue
             run = self.get_run(record.session.id)
             if run is not None and run.status == "running":
                 raise RunConflictError(f"Run already in progress for course: {course_id}")
+
+    def _course_lock(self, course_id: str) -> threading.Lock:
+        with self._course_locks_guard:
+            lock = self._course_locks.get(course_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._course_locks[course_id] = lock
+            return lock
 
     def _iter_records(self) -> list[_RunRecord]:
         records: dict[str, _RunRecord] = dict(self._runs)

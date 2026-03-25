@@ -1,6 +1,8 @@
 import json
 import shutil
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -45,6 +47,16 @@ class StubRunner:
 
     def snapshot(self, run_id: str):
         return self.snapshots.get(run_id)
+
+
+class SlowStubRunner(StubRunner):
+    def __init__(self, delay_seconds: float = 0.1) -> None:
+        super().__init__()
+        self.delay_seconds = delay_seconds
+
+    def start(self, spec):
+        time.sleep(self.delay_seconds)
+        super().start(spec)
 
 
 class RunsApiTests(unittest.TestCase):
@@ -650,6 +662,34 @@ class RunsApiTests(unittest.TestCase):
         self.assertEqual(self.runner.started_specs[-1]["review_mode"], "standard")
         self.assertEqual(self.runner.started_specs[-1]["target_output"], "interview_knowledge_base")
 
+    def test_resume_run_rejects_when_another_run_for_same_course_is_active(self) -> None:
+        first_draft = self.client.post(
+            "/course-drafts",
+            json={
+                "book_title": "Computer Networks",
+                "subtitle_text": "# 第1章 绪论\n\n本节介绍网络分层。",
+            },
+        ).json()
+        first_run = self.client.post("/runs", json={"draft_id": first_draft["id"]}).json()
+        self.runner.snapshots[first_run["id"]] = {"status": "completed", "last_error": None}
+        self.client.get(f"/runs/{first_run['id']}")
+
+        second_draft = self.client.post(
+            "/course-drafts",
+            json={
+                "book_title": "Computer Networks",
+                "subtitle_text": "# 第2章 传输层\n\n本节介绍端到端通信。",
+            },
+        ).json()
+        second_run = self.client.post("/runs", json={"draft_id": second_draft["id"]}).json()
+        self.runner.snapshots[first_run["id"]] = {"status": "failed", "last_error": "temporary failure"}
+        self.runner.snapshots[second_run["id"]] = {"status": "running", "last_error": None}
+
+        response = self.client.post(f"/runs/{first_run['id']}/resume")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("already in progress", response.json()["detail"])
+
     def test_resume_run_clears_stale_runtime_error_when_new_attempt_is_running(self) -> None:
         draft_id = self.client.post(
             "/course-drafts",
@@ -1096,3 +1136,43 @@ class RunsApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "completed")
+
+    def test_concurrent_create_run_requests_allow_only_one_active_run_per_course(self) -> None:
+        slow_runner = SlowStubRunner(delay_seconds=0.2)
+        slow_client = TestClient(
+            create_app(output_root=self.output_root, run_runner=slow_runner, gui_config_path=self.gui_config_path)
+        )
+        first_draft = slow_client.post(
+            "/course-drafts",
+            json={
+                "book_title": "Computer Networks",
+                "subtitle_text": "# 第1章 绪论\n\n本节介绍网络分层。",
+            },
+        ).json()
+        second_draft = slow_client.post(
+            "/course-drafts",
+            json={
+                "book_title": "Computer Networks",
+                "subtitle_text": "# 第2章 传输层\n\n本节介绍端到端通信。",
+            },
+        ).json()
+
+        barrier = threading.Barrier(3)
+        responses: list[tuple[int, dict[str, object]]] = []
+
+        def create_run(draft_id: str) -> None:
+            barrier.wait()
+            response = slow_client.post("/runs", json={"draft_id": draft_id})
+            responses.append((response.status_code, response.json()))
+
+        first_thread = threading.Thread(target=create_run, args=(first_draft["id"],))
+        second_thread = threading.Thread(target=create_run, args=(second_draft["id"],))
+        first_thread.start()
+        second_thread.start()
+        barrier.wait()
+        first_thread.join()
+        second_thread.join()
+
+        status_codes = sorted(status for status, _payload in responses)
+        self.assertEqual(status_codes, [201, 409])
+        self.assertEqual(len(slow_runner.started_specs), 1)
