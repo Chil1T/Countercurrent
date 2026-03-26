@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +20,56 @@ REQUIRED_PACK_FILES = (
     "04-跨章关联.md",
     "05-疑点与待核.md",
 )
+PACK_WRITER_FILES = {
+    "write_lecture_note": "01-精讲.md",
+    "write_terms": "02-术语与定义.md",
+    "write_interview_qa": "03-面试问答.md",
+    "write_cross_links": "04-跨章关联.md",
+    "write_open_questions": "05-疑点与待核.md",
+}
+GLOBAL_WRITER_FILES = {
+    "build_global_glossary": "global_glossary.md",
+    "build_interview_index": "interview_index.md",
+}
+WRITER_STAGE_SETS = {
+    "lecture_deep_dive": (
+        "write_lecture_note",
+        "write_terms",
+        "write_cross_links",
+    ),
+    "standard_knowledge_pack": (
+        "write_lecture_note",
+        "write_terms",
+        "write_interview_qa",
+        "write_cross_links",
+        "write_open_questions",
+    ),
+    "interview_knowledge_base": (
+        "write_lecture_note",
+        "write_terms",
+        "write_interview_qa",
+        "write_cross_links",
+    ),
+}
+PIPELINE_SIGNATURE = "pipeline-v4"
+HOSTED_PRESSURE_STAGES = (
+    "curriculum_anchor",
+    "gap_fill",
+    "pack_plan",
+    "write_lecture_note",
+    "write_terms",
+    "write_interview_qa",
+    "write_cross_links",
+    "write_open_questions",
+    "review",
+    "build_global_glossary",
+    "build_interview_index",
+)
+EXECUTION_STRATEGY = {
+    "chapter_loop": "serial",
+    "writer_loop": "serial",
+    "global_consolidation": "serial",
+}
 
 
 @dataclass
@@ -30,6 +81,8 @@ class PipelineConfig:
     course_blueprint: dict[str, Any] | None = None
     stage_models: dict[str, str] = field(default_factory=dict)
     backend_name: str = "heuristic"
+    enable_review: bool = False
+    run_global_consolidation: bool = False
 
 
 class IngestAgent:
@@ -106,6 +159,7 @@ class PipelineRunner:
         self.course_dir = self.config.output_dir / "courses" / self.course_blueprint["course_id"]
         self.runtime_state_path = self.course_dir / "runtime_state.json"
         self.blueprint_path = self.course_dir / "course_blueprint.json"
+        self.llm_call_log_path = self.course_dir / "runtime" / "llm_calls.jsonl"
         self.runtime_state = self._load_runtime_state()
 
     def run(self) -> None:
@@ -117,8 +171,10 @@ class PipelineRunner:
         save_blueprint(self.blueprint_path, self.course_blueprint)
         self._persist_runtime_state()
 
-        active_chapters: list[dict[str, Any]] = []
-        canonicalize_needed = False
+        if self.config.run_global_consolidation:
+            self._run_global_consolidation()
+            self._persist_runtime_state()
+            return
 
         for transcript_file in sorted(self.config.input_dir.glob("*.md")):
             chapter_blueprint = match_chapter_for_transcript(self.course_blueprint, transcript_file.stem)
@@ -128,6 +184,7 @@ class PipelineRunner:
             notebooklm_dir = chapter_dir / "notebooklm"
             intermediate_dir.mkdir(parents=True, exist_ok=True)
             notebooklm_dir.mkdir(parents=True, exist_ok=True)
+            chapter_changed = False
 
             normalized = self._load_step_json(
                 chapter_id=chapter_output_id,
@@ -142,6 +199,7 @@ class PipelineRunner:
                 )
                 self._write_json(intermediate_dir / "normalized_transcript.json", normalized)
                 self._mark_step_complete(chapter_output_id, "ingest", require_blueprint=False)
+                chapter_changed = True
 
             topic_map = self._load_step_json(
                 chapter_id=chapter_output_id,
@@ -156,10 +214,11 @@ class PipelineRunner:
                         "chapter_blueprint": chapter_blueprint,
                         "normalized_transcript": normalized,
                     },
+                    scope=chapter_output_id,
                 )
                 self._write_json(intermediate_dir / "topic_anchor_map.json", topic_map)
                 self._mark_step_complete(chapter_output_id, "curriculum_anchor")
-                canonicalize_needed = True
+                chapter_changed = True
 
             augmentation = self._load_step_json(
                 chapter_id=chapter_output_id,
@@ -175,37 +234,69 @@ class PipelineRunner:
                         "normalized_transcript": normalized,
                         "topic_anchor_map": topic_map,
                     },
+                    scope=chapter_output_id,
                 )
                 self._write_json(intermediate_dir / "augmentation_candidates.json", augmentation)
                 self._mark_step_complete(chapter_output_id, "gap_fill")
-                canonicalize_needed = True
+                chapter_changed = True
 
-            pack = self._load_step_pack(
-                chapter_id=chapter_output_id,
-                step_name="compose_pack",
-                notebooklm_dir=notebooklm_dir,
+            pack_payload = self._build_pack_payload(
+                chapter_blueprint=chapter_blueprint,
+                normalized=normalized,
+                topic_map=topic_map,
+                augmentation=augmentation,
             )
-            if pack is None:
-                pack = self._run_agent(
-                    "compose_pack",
-                    self._build_pack_payload(
-                        chapter_blueprint=chapter_blueprint,
-                        normalized=normalized,
-                        topic_map=topic_map,
-                        augmentation=augmentation,
-                    ),
+            pack_plan_path = intermediate_dir / "pack_plan.json"
+            pack_plan = None if chapter_changed else self._load_step_json(
+                chapter_id=chapter_output_id,
+                step_name="pack_plan",
+                path=pack_plan_path,
+            )
+            if pack_plan is None:
+                pack_plan = self._run_agent(
+                    "pack_plan",
+                    pack_payload,
+                    scope=chapter_output_id,
                 )
-                self._write_pack(notebooklm_dir, pack)
-                self._mark_step_complete(chapter_output_id, "compose_pack")
-                canonicalize_needed = True
+                self._write_json(pack_plan_path, pack_plan)
+                self._mark_step_complete(chapter_output_id, "pack_plan")
+                chapter_changed = True
+
+            pack_files: dict[str, str] = {}
+            for writer_name in self._active_writer_names():
+                file_name = PACK_WRITER_FILES[writer_name]
+                output_path = notebooklm_dir / file_name
+                content = None if chapter_changed else self._load_step_text(
+                    chapter_id=chapter_output_id,
+                    step_name=writer_name,
+                    path=output_path,
+                )
+                if content is None:
+                    content = self._run_text_agent(
+                        writer_name,
+                        self._build_writer_payload(
+                            chapter_blueprint=chapter_blueprint,
+                            normalized=normalized,
+                            topic_map=topic_map,
+                            augmentation=augmentation,
+                            pack_plan=pack_plan,
+                        ),
+                        scope=chapter_output_id,
+                    )
+                    output_path.write_text(content, encoding="utf-8")
+                    self._mark_step_complete(chapter_output_id, writer_name)
+                    chapter_changed = True
+                pack_files[file_name] = content
+
+            pack = {"files": pack_files}
 
             review_path = chapter_dir / "review_report.json"
-            if self._should_run_review(augmentation, pack):
+            if self.config.enable_review:
                 review = self._load_step_json(
                     chapter_id=chapter_output_id,
                     step_name="review",
                     path=review_path,
-                )
+                ) if not chapter_changed else None
                 if review is None:
                     review = self._run_agent(
                         "review",
@@ -216,62 +307,90 @@ class PipelineRunner:
                             augmentation=augmentation,
                             pack=pack,
                         ),
+                        scope=chapter_output_id,
                     )
                     self._write_json(review_path, review)
                     self._mark_step_complete(chapter_output_id, "review")
+                    chapter_changed = True
             else:
-                review = {
-                    "status": "skipped",
-                    "reason": "light_review_not_needed",
-                    "issues": [],
-                }
-                self._write_json(review_path, review)
-                self._mark_step_complete(chapter_output_id, "review")
+                if review_path.exists():
+                    review_path.unlink()
+                self._clear_step_record(chapter_output_id, "review")
 
-            if review.get("status") == "quarantine":
-                quarantine_dir = self.course_dir / "quarantine" / chapter_output_id
-                quarantine_dir.parent.mkdir(parents=True, exist_ok=True)
-                if quarantine_dir.exists():
-                    shutil.rmtree(quarantine_dir)
-                if chapter_dir.exists():
-                    shutil.move(str(chapter_dir), str(quarantine_dir))
-                continue
+        self._persist_runtime_state()
 
-            active_chapters.append(
-                {
-                    "chapter_id": chapter_output_id,
-                    "chapter_blueprint": chapter_blueprint,
-                    "term_file": (notebooklm_dir / "02-术语与定义.md").read_text(encoding="utf-8"),
-                    "interview_file": (notebooklm_dir / "03-面试问答.md").read_text(encoding="utf-8"),
-                    "link_file": (notebooklm_dir / "04-跨章关联.md").read_text(encoding="utf-8"),
-                }
-            )
+    def _run_global_consolidation(self) -> None:
+        active_chapters = self._collect_active_chapters()
+        if not active_chapters:
+            return
 
         global_dir = self.course_dir / "global"
         global_dir.mkdir(parents=True, exist_ok=True)
-        glossary_path = global_dir / "global_glossary.md"
-        index_path = global_dir / "interview_index.md"
-        if active_chapters and (
-            canonicalize_needed
-            or not self._step_is_valid(
-                scope="global",
-                step_name="canonicalize",
-                required_paths=(glossary_path, index_path),
-                require_blueprint=True,
-            )
-        ):
-            canonicalized = self._run_agent(
-                "canonicalize",
-                {
-                    "course_blueprint": self._slim_course_blueprint(),
-                    "chapters": active_chapters,
-                },
-            )
-            glossary_path.write_text(canonicalized.get("global_glossary", "# 全书术语表\n"), encoding="utf-8")
-            index_path.write_text(canonicalized.get("interview_index", "# 面试索引\n"), encoding="utf-8")
-            self._mark_step_complete("global", "canonicalize")
+        global_payload = {
+            "course_blueprint": self._slim_course_blueprint(),
+            "chapters": active_chapters,
+        }
 
-        self._persist_runtime_state()
+        glossary = self._run_text_agent("build_global_glossary", global_payload, scope="global")
+        (global_dir / "global_glossary.md").write_text(glossary, encoding="utf-8")
+        self._mark_step_complete("global", "build_global_glossary")
+
+        interview_index = self._run_text_agent("build_interview_index", global_payload, scope="global")
+        (global_dir / "interview_index.md").write_text(interview_index, encoding="utf-8")
+        self._mark_step_complete("global", "build_interview_index")
+
+    def _collect_active_chapters(self) -> list[dict[str, Any]]:
+        active_chapters: list[dict[str, Any]] = []
+        chapters_dir = self.course_dir / "chapters"
+        if not chapters_dir.exists():
+            return active_chapters
+
+        runtime_chapters = self.runtime_state.get("chapters", {})
+        if runtime_chapters:
+            allowed_chapter_ids = {
+                chapter_id
+                for chapter_id, chapter_state in runtime_chapters.items()
+                if self._chapter_scope_matches_current_blueprint(chapter_state)
+            }
+        else:
+            allowed_chapter_ids = {
+                str(chapter.get("chapter_id"))
+                for chapter in self.course_blueprint.get("chapters", [])
+                if chapter.get("chapter_id")
+            }
+
+        for chapter_dir in sorted(path for path in chapters_dir.iterdir() if path.is_dir()):
+            chapter_id = chapter_dir.name
+            if allowed_chapter_ids and chapter_id not in allowed_chapter_ids:
+                continue
+            chapter_blueprint = match_chapter_for_transcript(self.course_blueprint, chapter_id)
+            notebooklm_dir = chapters_dir / chapter_id / "notebooklm"
+            term_path = notebooklm_dir / "02-术语与定义.md"
+            interview_path = notebooklm_dir / "03-面试问答.md"
+            link_path = notebooklm_dir / "04-跨章关联.md"
+            if not (term_path.exists() and link_path.exists()):
+                continue
+            active_chapters.append(
+                {
+                    "chapter_id": chapter_id,
+                    "chapter_blueprint": chapter_blueprint,
+                    "term_file": term_path.read_text(encoding="utf-8"),
+                    "interview_file": interview_path.read_text(encoding="utf-8") if interview_path.exists() else "",
+                    "link_file": link_path.read_text(encoding="utf-8"),
+                }
+            )
+        return active_chapters
+
+    def _chapter_scope_matches_current_blueprint(self, chapter_state: dict[str, Any]) -> bool:
+        steps = chapter_state.get("steps", {})
+        current_blueprint_hash = self.course_blueprint["blueprint_hash"]
+        for step_name in ("write_terms", "write_cross_links"):
+            step_record = steps.get(step_name)
+            if not isinstance(step_record, dict):
+                return False
+            if step_record.get("blueprint_hash") != current_blueprint_hash:
+                return False
+        return True
 
     def _slim_course_blueprint(self) -> dict[str, Any]:
         return {
@@ -283,15 +402,65 @@ class PipelineRunner:
             "blueprint_hash": self.course_blueprint["blueprint_hash"],
         }
 
-    def _run_agent(self, agent_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def _run_agent(self, agent_name: str, payload: dict[str, Any], *, scope: str) -> dict[str, Any]:
         prompt = self._load_prompt(agent_name)
-        model_override = self.config.stage_models.get(agent_name)
-        return self.llm_backend.generate_json(
-            agent_name=agent_name,
-            prompt=prompt,
-            payload=payload,
-            model_override=model_override,
-        )
+        model_override = self._resolve_stage_model(agent_name)
+        started_at = time.perf_counter()
+        response: dict[str, Any] | None = None
+        error: Exception | None = None
+        try:
+            response = self.llm_backend.generate_json(
+                agent_name=agent_name,
+                prompt=prompt,
+                payload=payload,
+                model_override=model_override,
+            )
+            return response
+        except Exception as exc:
+            error = exc
+            raise
+        finally:
+            self._record_llm_call(
+                scope=scope,
+                stage=agent_name,
+                prompt=prompt,
+                payload=payload,
+                response=response,
+                response_type="json",
+                model_override=model_override,
+                started_at=started_at,
+                error=error,
+            )
+
+    def _run_text_agent(self, agent_name: str, payload: dict[str, Any], *, scope: str) -> str:
+        prompt = self._load_prompt(agent_name)
+        model_override = self._resolve_stage_model(agent_name)
+        response: str | None = None
+        error: Exception | None = None
+        started_at = time.perf_counter()
+        try:
+            response = self.llm_backend.generate_text(
+                agent_name=agent_name,
+                prompt=prompt,
+                payload=payload,
+                model_override=model_override,
+            )
+            return response
+        except Exception as exc:
+            error = exc
+            raise
+        finally:
+            self._record_llm_call(
+                scope=scope,
+                stage=agent_name,
+                prompt=prompt,
+                payload=payload,
+                response=response,
+                response_type="text",
+                model_override=model_override,
+                started_at=started_at,
+                error=error,
+            )
 
     def _load_prompt(self, agent_name: str) -> str:
         prompt_path = self.prompt_dir / f"{agent_name}.md"
@@ -312,6 +481,41 @@ class PipelineRunner:
             "transcript_evidence": self._slim_transcript(normalized),
             "topic_anchor_map": topic_map,
             "augmentation_digest": self._slim_augmentation(augmentation),
+            "writer_profile": self._resolve_writer_profile(),
+        }
+
+    def _build_writer_payload(
+        self,
+        chapter_blueprint: dict[str, Any],
+        normalized: dict[str, Any],
+        topic_map: dict[str, Any],
+        augmentation: dict[str, Any],
+        pack_plan: dict[str, Any],
+    ) -> dict[str, Any]:
+        payload = self._build_pack_payload(
+            chapter_blueprint=chapter_blueprint,
+            normalized=normalized,
+            topic_map=topic_map,
+            augmentation=augmentation,
+        )
+        payload.pop("transcript_evidence", None)
+        payload["evidence_summary"] = self._build_writer_evidence_summary(normalized, topic_map)
+        payload["pack_plan"] = pack_plan
+        return payload
+
+    def _build_writer_evidence_summary(self, normalized: dict[str, Any], topic_map: dict[str, Any]) -> dict[str, Any]:
+        highlights = [
+            {
+                "chunk_id": chunk["chunk_id"],
+                "excerpt": chunk["clean_text"][:240],
+                "speaker_role": chunk["speaker_role"],
+            }
+            for chunk in normalized["chunks"][:6]
+        ]
+        return {
+            "chapter_summary": topic_map.get("chapter_summary", ""),
+            "highlight_count": len(highlights),
+            "highlights": highlights,
         }
 
     def _build_review_payload(
@@ -404,6 +608,23 @@ class PipelineRunner:
             return None
         return json.loads(path.read_text(encoding="utf-8"))
 
+    def _load_step_text(
+        self,
+        *,
+        chapter_id: str,
+        step_name: str,
+        path: Path,
+        require_blueprint: bool = True,
+    ) -> str | None:
+        if not self._step_is_valid(
+            scope=chapter_id,
+            step_name=step_name,
+            required_paths=(path,),
+            require_blueprint=require_blueprint,
+        ):
+            return None
+        return path.read_text(encoding="utf-8")
+
     def _load_step_pack(self, *, chapter_id: str, step_name: str, notebooklm_dir: Path) -> dict[str, Any] | None:
         required_paths = tuple(notebooklm_dir / name for name in REQUIRED_PACK_FILES)
         if not self._step_is_valid(
@@ -429,6 +650,8 @@ class PipelineRunner:
             return False
         if not all(path.exists() for path in required_paths):
             return False
+        if record.get("pipeline_signature") != PIPELINE_SIGNATURE:
+            return False
         if require_blueprint and record.get("blueprint_hash") != self.course_blueprint["blueprint_hash"]:
             return False
         return record.get("status") == "completed"
@@ -438,11 +661,20 @@ class PipelineRunner:
             return self.runtime_state.get("global", {}).get(step_name)
         return self.runtime_state.get("chapters", {}).get(scope, {}).get("steps", {}).get(step_name)
 
+    def _clear_step_record(self, scope: str, step_name: str) -> None:
+        if scope == "global":
+            self.runtime_state.get("global", {}).pop(step_name, None)
+        else:
+            chapter_state = self.runtime_state.get("chapters", {}).get(scope, {})
+            chapter_state.get("steps", {}).pop(step_name, None)
+        self._persist_runtime_state()
+
     def _mark_step_complete(self, scope: str, step_name: str, require_blueprint: bool = True) -> None:
         payload = {
             "status": "completed",
             "updated_at": self._now_iso(),
             "blueprint_hash": self.course_blueprint["blueprint_hash"] if require_blueprint else None,
+            "pipeline_signature": PIPELINE_SIGNATURE,
         }
         if scope == "global":
             self.runtime_state.setdefault("global", {})[step_name] = payload
@@ -452,27 +684,49 @@ class PipelineRunner:
         self.runtime_state["last_error"] = None
         self._persist_runtime_state()
 
+    def _current_run_identity(self) -> dict[str, Any]:
+        return {
+            "review_enabled": self.config.enable_review,
+            "review_mode": self.course_blueprint.get("policy", {}).get("review_mode"),
+            "target_output": self.course_blueprint.get("policy", {}).get("target_output"),
+        }
+
     def _load_runtime_state(self) -> dict[str, Any]:
         if not self.runtime_state_path.exists():
             return self._fresh_runtime_state()
         state = json.loads(self.runtime_state_path.read_text(encoding="utf-8"))
+        if self.config.run_global_consolidation and "run_identity" in state:
+            run_identity = state["run_identity"]
+        else:
+            run_identity = self._current_run_identity()
+            state["run_identity"] = run_identity
         state["course_id"] = self.course_blueprint["course_id"]
         state["blueprint_hash"] = self.course_blueprint["blueprint_hash"]
-        state.setdefault("provider", self.config.backend_name)
-        state.setdefault("default_model", self.config.model)
-        state.setdefault("stage_models", self.config.stage_models)
+        state["provider"] = self.config.backend_name
+        state["default_model"] = self.config.model
+        state["stage_models"] = self.config.stage_models
+        state["pipeline_signature"] = PIPELINE_SIGNATURE
+        state["review_enabled"] = run_identity.get("review_enabled", self.config.enable_review)
+        state["review_mode"] = run_identity.get("review_mode", self.course_blueprint.get("policy", {}).get("review_mode"))
+        state["target_output"] = run_identity.get("target_output", self.course_blueprint.get("policy", {}).get("target_output"))
         state.setdefault("chapters", {})
         state.setdefault("global", {})
         state.setdefault("last_error", None)
         return state
 
     def _fresh_runtime_state(self) -> dict[str, Any]:
+        run_identity = self._current_run_identity()
         return {
             "course_id": self.course_blueprint["course_id"],
             "blueprint_hash": self.course_blueprint["blueprint_hash"],
             "provider": self.config.backend_name,
             "default_model": self.config.model,
             "stage_models": self.config.stage_models,
+            "pipeline_signature": PIPELINE_SIGNATURE,
+            "review_enabled": run_identity["review_enabled"],
+            "review_mode": run_identity["review_mode"],
+            "target_output": run_identity["target_output"],
+            "run_identity": run_identity,
             "chapters": {},
             "global": {},
             "last_error": None,
@@ -485,11 +739,82 @@ class PipelineRunner:
             encoding="utf-8",
         )
 
+    def _record_llm_call(
+        self,
+        *,
+        scope: str,
+        stage: str,
+        prompt: str,
+        payload: dict[str, Any],
+        response: dict[str, Any] | str | None,
+        response_type: str,
+        model_override: str | None,
+        started_at: float,
+        error: Exception | None,
+    ) -> None:
+        metadata = None
+        consume = getattr(self.llm_backend, "consume_last_call_metadata", None)
+        if callable(consume):
+            metadata = consume()
+
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        provider = self.config.backend_name
+        model = model_override or self.config.model or None
+        input_tokens = self._estimate_token_count(f"{prompt}\n{json.dumps(payload, ensure_ascii=False)}")
+        output_tokens = self._estimate_token_count(response) if response is not None else None
+        status = "error" if error else "completed"
+        error_text = str(error) if error else None
+
+        if metadata:
+            provider = metadata.get("provider") or provider
+            model = metadata.get("model") or model
+            input_tokens = metadata.get("input_tokens") or input_tokens
+            output_tokens = metadata.get("output_tokens") or output_tokens
+            duration_ms = metadata.get("duration_ms") or duration_ms
+            status = metadata.get("status") or status
+            error_text = metadata.get("error") or error_text
+
+        entry = {
+            "course_id": self.course_blueprint["course_id"],
+            "scope": scope,
+            "stage": stage,
+            "provider": provider,
+            "model": model,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "duration_ms": duration_ms,
+            "status": status,
+            "error": error_text,
+            "response_type": response_type,
+            "logged_at": self._now_iso(),
+            "pipeline_signature": PIPELINE_SIGNATURE,
+        }
+        self.llm_call_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.llm_call_log_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    def _estimate_token_count(self, value: dict[str, Any] | str) -> int:
+        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        return max(1, len(text.encode("utf-8")) // 4)
+
     def _now_iso(self) -> str:
         return datetime.now(timezone.utc).isoformat()
 
+    def _resolve_stage_model(self, agent_name: str) -> str | None:
+        return self.config.stage_models.get(agent_name)
+
+    def _resolve_writer_profile(self) -> str:
+        return self.course_blueprint.get("policy", {}).get("target_output", "interview_knowledge_base")
+
+    def _active_writer_names(self) -> tuple[str, ...]:
+        profile = self._resolve_writer_profile()
+        return WRITER_STAGE_SETS.get(profile, WRITER_STAGE_SETS["standard_knowledge_pack"])
+
 
 class HeuristicLLMBackend:
+    def __init__(self) -> None:
+        self._last_call_metadata: dict[str, Any] | None = None
+
     def generate_json(
         self,
         agent_name: str,
@@ -498,18 +823,68 @@ class HeuristicLLMBackend:
         model_override: str | None = None,
     ) -> dict[str, Any]:
         if agent_name == "blueprint_builder":
-            return self._blueprint_builder(payload)
-        if agent_name == "curriculum_anchor":
-            return self._curriculum_anchor(payload)
-        if agent_name == "gap_fill":
-            return self._gap_fill(payload)
-        if agent_name == "compose_pack":
-            return self._compose_pack(payload)
-        if agent_name == "review":
-            return self._review(payload)
-        if agent_name == "canonicalize":
-            return self._canonicalize(payload)
-        raise KeyError(f"Unsupported agent: {agent_name}")
+            response = self._blueprint_builder(payload)
+        elif agent_name == "curriculum_anchor":
+            response = self._curriculum_anchor(payload)
+        elif agent_name == "gap_fill":
+            response = self._gap_fill(payload)
+        elif agent_name == "pack_plan":
+            response = self._pack_plan(payload)
+        elif agent_name == "compose_pack":
+            response = self._compose_pack(payload)
+        elif agent_name == "review":
+            response = self._review(payload)
+        elif agent_name == "canonicalize":
+            response = self._canonicalize(payload)
+        else:
+            raise KeyError(f"Unsupported agent: {agent_name}")
+        self._remember_call(payload, response, model_override)
+        return response
+
+    def generate_text(
+        self,
+        agent_name: str,
+        prompt: str,
+        payload: dict[str, Any],
+        model_override: str | None = None,
+    ) -> str:
+        if agent_name in PACK_WRITER_FILES:
+            compose_pack = self._compose_pack(payload)
+            response = compose_pack["files"][PACK_WRITER_FILES[agent_name]]
+            self._remember_call(payload, response, model_override)
+            return response
+
+        if agent_name == "build_global_glossary":
+            canonicalized = self._canonicalize(payload)
+            response = canonicalized["global_glossary"]
+            self._remember_call(payload, response, model_override)
+            return response
+        if agent_name == "build_interview_index":
+            canonicalized = self._canonicalize(payload)
+            response = canonicalized["interview_index"]
+            self._remember_call(payload, response, model_override)
+            return response
+        raise KeyError(f"Unsupported text agent: {agent_name}")
+
+    def consume_last_call_metadata(self) -> dict[str, Any] | None:
+        metadata = self._last_call_metadata
+        self._last_call_metadata = None
+        return metadata
+
+    def _remember_call(self, payload: dict[str, Any], response: dict[str, Any] | str, model_override: str | None) -> None:
+        self._last_call_metadata = {
+            "provider": "heuristic",
+            "model": model_override,
+            "input_tokens": max(1, len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) // 4),
+            "output_tokens": max(
+                1,
+                len((response if isinstance(response, str) else json.dumps(response, ensure_ascii=False)).encode("utf-8"))
+                // 4,
+            ),
+            "duration_ms": 0,
+            "status": "completed",
+            "error": None,
+        }
 
     def _blueprint_builder(self, payload: dict[str, Any]) -> dict[str, Any]:
         chapters = [
@@ -570,17 +945,60 @@ class HeuristicLLMBackend:
                 )
         return {"candidates": candidates}
 
+    def _pack_plan(self, payload: dict[str, Any]) -> dict[str, Any]:
+        writer_profile = payload.get("writer_profile") or payload.get("course_blueprint", {}).get("policy", {}).get(
+            "target_output",
+            "interview_knowledge_base",
+        )
+        title = payload["chapter_blueprint"].get("title", payload["chapter_blueprint"]["chapter_id"])
+        return {
+            "writer_profile": writer_profile,
+            "chapter_title": title,
+            "files": [
+                {"stage": "write_lecture_note", "file_name": "01-精讲.md", "goal": "基于 transcript 整理章节主线。"},
+                {"stage": "write_terms", "file_name": "02-术语与定义.md", "goal": "提炼术语和保守定义。"},
+                {"stage": "write_interview_qa", "file_name": "03-面试问答.md", "goal": "生成可检索的面试问答。"},
+                {"stage": "write_cross_links", "file_name": "04-跨章关联.md", "goal": "解释章节前后依赖。"},
+                {"stage": "write_open_questions", "file_name": "05-疑点与待核.md", "goal": "保留待核查与低置信度点。"},
+            ],
+        }
+
+    def _build_writer_evidence_summary(self, normalized: dict[str, Any], topic_map: dict[str, Any]) -> dict[str, Any]:
+        highlights = [
+            {
+                "chunk_id": chunk["chunk_id"],
+                "excerpt": chunk["clean_text"][:240],
+                "speaker_role": chunk["speaker_role"],
+            }
+            for chunk in normalized["chunks"][:6]
+        ]
+        return {
+            "chapter_summary": topic_map.get("chapter_summary", ""),
+            "highlight_count": len(highlights),
+            "highlights": highlights,
+        }
+
     def _compose_pack(self, payload: dict[str, Any]) -> dict[str, Any]:
         chapter = payload["chapter_blueprint"]
-        transcript = payload["transcript_evidence"]
+        transcript = payload.get("transcript_evidence")
+        evidence_summary = payload.get("evidence_summary", {})
         anchors = payload["topic_anchor_map"].get("anchors", [])
         augmentation = payload["augmentation_digest"]
         candidates = augmentation.get("candidates", [])
+        target_output = payload.get("course_blueprint", {}).get("policy", {}).get("target_output", "interview_knowledge_base")
 
-        lecture_lines = "\n".join(
-            f"- `{chunk['chunk_id']}` {chunk['clean_text']}（来源：transcript）"
-            for chunk in transcript["chunks"]
-        ) or "- 暂无 transcript 证据。"
+        transcript_chunks = transcript.get("chunks", []) if transcript else []
+        if transcript_chunks:
+            lecture_lines = "\n".join(
+                f"- `{chunk['chunk_id']}` {chunk['clean_text']}（来源：transcript）"
+                for chunk in transcript_chunks
+            )
+        else:
+            lecture_lines = "\n".join(
+                f"- `{item['chunk_id']}` {item['excerpt']}（来源：证据摘要）"
+                for item in evidence_summary.get("highlights", [])
+            )
+        lecture_lines = lecture_lines or "- 暂无 transcript 证据。"
         term_lines = "\n".join(
             f"- **{anchor['canonical_topic']}**："
             f"{'录音已覆盖。' if anchor['coverage_status'] == 'covered' else '录音未讲清，需教材补全。'}"
@@ -599,11 +1017,27 @@ class HeuristicLLMBackend:
         link_lines = "\n".join(f"- {item}" for item in self._build_link_lines(payload["course_blueprint"], chapter))
 
         title = chapter.get("title", chapter["chapter_id"])
+        lecture_heading = "## 录音证据"
+        lecture_footer = "## 教材级补全"
+        interview_heading = "## 概念题"
+        interview_tail = ""
+        if target_output == "lecture_deep_dive":
+            lecture_heading = "## 课堂精讲主线"
+            lecture_footer = "## 讲义化补充"
+            interview_heading = "## 课堂复盘提问"
+            interview_tail = "\n\n> 当前模板偏向课堂精讲，不强调面试口语化表达。"
+        elif target_output == "standard_knowledge_pack":
+            lecture_heading = "## 核心内容"
+            lecture_footer = "## 标准补充"
+            interview_heading = "## 自测问答"
+            interview_tail = "\n\n> 当前模板采用平衡型知识包组织方式。"
+        else:
+            interview_tail = "\n\n> 当前模板强调面试表达与高频定义复述。"
         return {
             "files": {
-                "01-精讲.md": f"# {title}·精讲\n\n## 录音证据\n{lecture_lines}\n\n## 教材级补全\n{augment_lines}\n",
+                "01-精讲.md": f"# {title}·精讲\n\n{lecture_heading}\n{lecture_lines}\n\n{lecture_footer}\n{augment_lines}\n",
                 "02-术语与定义.md": f"# {title}·术语与定义\n\n## 核心术语\n{term_lines}\n",
-                "03-面试问答.md": f"# {title}·面试问答\n\n## 概念题\n{interview_lines}\n",
+                "03-面试问答.md": f"# {title}·面试问答\n\n{interview_heading}\n{interview_lines}{interview_tail}\n",
                 "04-跨章关联.md": f"# {title}·跨章关联\n\n## 前后章节承接\n{link_lines}\n",
                 "05-疑点与待核.md": f"# {title}·疑点与待核\n\n## 待核查点\n{augment_lines}\n",
             }
@@ -614,7 +1048,7 @@ class HeuristicLLMBackend:
         high_risk = [item for item in candidates if item.get("confidence") == "low" and item.get("allowed_in_final")]
         if high_risk:
             return {
-                "status": "quarantine",
+                "status": "needs_attention",
                 "issues": [
                     {
                         "severity": "high",

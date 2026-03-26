@@ -71,6 +71,7 @@ def bootstrap_course_blueprint(
     book_title: str,
     toc_text: str | None,
     llm_backend: LLMBackend | None,
+    blueprint_builder_model: str | None = None,
     authors: list[str] | None = None,
     edition: str | None = None,
     publisher: str | None = None,
@@ -110,9 +111,10 @@ def bootstrap_course_blueprint(
                 "transcript_inventory": transcript_inventory,
                 "source_type": "published_textbook",
             },
+            model_override=blueprint_builder_model,
         )
         blueprint = {
-            "course_name": response.get("course_name", metadata["title"]),
+            "course_name": metadata["title"],
             "source_type": "published_textbook",
             "book": metadata,
             "chapters": response.get("chapters", []),
