@@ -51,6 +51,8 @@ class GuiDevScriptTest(unittest.TestCase):
             self.assertIn("frontend-dev.log", result.stdout)
             self.assertIn("http://127.0.0.1:8100/healthz", result.stdout)
             self.assertIn("http://127.0.0.1:3100/courses/new/input", result.stdout)
+            self.assertIn("npx", result.stdout)
+            self.assertIn("next dev --hostname 127.0.0.1 --port 3100", result.stdout)
             self.assertTrue((workspace / "out" / "_gui").exists())
 
     def test_start_gui_local_requires_server_and_web_directories(self) -> None:

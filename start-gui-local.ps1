@@ -7,6 +7,7 @@ param(
     [int]$HealthTimeoutSeconds = 60,
     [string]$PythonCommand = "python",
     [string]$NpmCommand = "npm",
+    [string]$NpxCommand = "npx",
     [switch]$NoCleanPorts,
     [switch]$SkipBackendInstall,
     [switch]$SkipFrontendInstall,
@@ -99,6 +100,14 @@ function Quote-CommandSegment {
     return "'" + $Value.Replace("'", "''") + "'"
 }
 
+function Quote-CmdArgument {
+    param(
+        [string]$Value
+    )
+
+    return '"' + $Value.Replace('"', '""') + '"'
+}
+
 try {
     if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) {
         $scriptPath = $MyInvocation.MyCommand.Path
@@ -120,6 +129,8 @@ try {
     $frontendHealthUrl = "http://$BindHost`:$FrontendPort/courses/new/input"
 
     New-Item -ItemType Directory -Path $guiOutDir -Force | Out-Null
+    Remove-Item -LiteralPath $backendLog -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $frontendLog -Force -ErrorAction SilentlyContinue
 
     Write-Host "Workspace root: $workspace"
     Write-Host "Backend log: $backendLog"
@@ -136,8 +147,10 @@ try {
 
     $backendInstallCommand = "& $(Quote-CommandSegment $PythonCommand) -m pip install -r $(Quote-CommandSegment (Join-Path $workspace 'server\\requirements.txt'))"
     $frontendInstallCommand = "& $(Quote-CommandSegment $NpmCommand) install"
-    $backendStartCommand = "& $(Quote-CommandSegment $PythonCommand) -m uvicorn server.app.main:app --host $BindHost --port $BackendPort *> $(Quote-CommandSegment $backendLog)"
-    $frontendStartCommand = "& $(Quote-CommandSegment $NpmCommand) run dev -- --hostname $BindHost --port $FrontendPort *> $(Quote-CommandSegment $frontendLog)"
+    $backendRuntimeCommand = "$PythonCommand -m uvicorn server.app.main:app --host $BindHost --port $BackendPort"
+    $frontendRuntimeCommand = "$NpxCommand next dev --hostname $BindHost --port $FrontendPort"
+    $backendStartCommand = "$backendRuntimeCommand > $(Quote-CmdArgument $backendLog) 2>&1"
+    $frontendStartCommand = "$frontendRuntimeCommand > $(Quote-CmdArgument $frontendLog) 2>&1"
 
     if (-not $SkipBackendInstall) {
         Write-Host "Backend install command: $backendInstallCommand"
@@ -167,12 +180,12 @@ try {
         exit 0
     }
 
-    Start-Process -FilePath "powershell.exe" `
-        -ArgumentList @("-NoLogo", "-NoProfile", "-Command", $backendStartCommand) `
+    Start-Process -FilePath "cmd.exe" `
+        -ArgumentList @("/c", $backendStartCommand) `
         -WorkingDirectory $workspace | Out-Null
 
-    Start-Process -FilePath "powershell.exe" `
-        -ArgumentList @("-NoLogo", "-NoProfile", "-Command", $frontendStartCommand) `
+    Start-Process -FilePath "cmd.exe" `
+        -ArgumentList @("/c", $frontendStartCommand) `
         -WorkingDirectory $webRoot | Out-Null
 
     Wait-Http200 -Url $backendHealthUrl -TimeoutSeconds $HealthTimeoutSeconds
