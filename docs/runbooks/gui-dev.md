@@ -209,7 +209,7 @@ out/courses/<course_id>/runtime/llm_calls.jsonl
 
 - 清理 `3000/8000` 监听端口
 - 后端使用 `python -m uvicorn server.app.main:app --host 127.0.0.1 --port 8000`
-- 前端使用 `npm run dev -- --hostname 127.0.0.1 --port 3000`
+- 前端使用 `npx next dev --hostname 127.0.0.1 --port 3000`
 - 日志写入 `out/_gui/backend-dev.log` 与 `out/_gui/frontend-dev.log`
 - 轮询 `healthz` 与 `/courses/new/input`，只有两者都返回 `200` 才算启动成功
 
@@ -239,7 +239,7 @@ cd web
 npm install
 npm run lint
 npm run build
-npm run dev -- --hostname 127.0.0.1 --port 3000
+npx next dev --hostname 127.0.0.1 --port 3000
 ```
 
 ### Backend
@@ -288,7 +288,7 @@ python -m uvicorn server.app.main:app --host 127.0.0.1 --port 8000
 
 ```powershell
 cd web
-npm run dev -- --hostname 127.0.0.1 --port 3000
+npx next dev --hostname 127.0.0.1 --port 3000
 ```
 
 ### Background Start
@@ -304,7 +304,7 @@ Start-Process cmd.exe -ArgumentList '/c','python -m uvicorn server.app.main:app 
 前端：
 
 ```powershell
-Start-Process cmd.exe -ArgumentList '/c','npm run dev -- --hostname 127.0.0.1 --port 3000 > ..\out\_gui\frontend-dev.log 2>&1' -WorkingDirectory (Join-Path (Get-Location) 'web')
+Start-Process cmd.exe -ArgumentList '/c','npx next dev --hostname 127.0.0.1 --port 3000 > ..\out\_gui\frontend-dev.log 2>&1' -WorkingDirectory (Join-Path (Get-Location) 'web')
 ```
 
 说明：
