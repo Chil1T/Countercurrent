@@ -49,17 +49,6 @@
   - `stub`
 - 最小 `GitHub Actions CI`
 
-## 设计重点
-
-当前项目的重点不在聊天界面，而在运行时设计：
-
-- 用 `course_blueprint.json` 把课程结构显式化
-- 用 `runtime_state.json` 记录执行状态与恢复边界
-- GUI 不自建第二套执行逻辑，而是包裹 CLI 与 runtime contracts
-- 针对长流程任务显式处理 checkpoint、失效、resume、日志与结果树
-
-如果你关心的是教育场景下的 LLM 驱动知识库生成与运行时系统，这部分比单纯的前端展示更值得看。
-
 ## Quick Start
 
 ### GUI：本地一键联调
@@ -132,7 +121,6 @@ python -m processagent.cli run-course `
 
 ## 当前边界与限制
 
-为了让 README 更诚实，这里直接写当前边界：
 
 - 当前主输入仍以字幕/转写文本为主，多模态教材材料还未接入正式 runtime
 - 同一门课程当前只允许一个活跃 run，避免并发写坏同一份课程产物
