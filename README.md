@@ -54,7 +54,33 @@ python -m processagent.cli run-course `
 - 断点续跑: `python -m processagent.cli resume-course ...`
 - 查看状态: `python -m processagent.cli show-status ...`
 - 清理课程产物: `python -m processagent.cli clean-course ...`
+- GUI 本地联调一键启动: `.\start-gui-local.ps1`
 - 本地测试: `python -m unittest discover -s tests -v`
+
+## GUI 本地联调
+
+默认一键启动前后端开发服务：
+
+```powershell
+.\start-gui-local.ps1
+```
+
+常见可选参数：
+
+```powershell
+.\start-gui-local.ps1 `
+  -BackendPort 8100 `
+  -FrontendPort 3100 `
+  -SkipBackendInstall `
+  -SkipFrontendInstall
+```
+
+脚本会执行以下本地联调编排：
+
+- 默认清理 `8000/3000` 端口监听进程
+- 后端日志写入 `out/_gui/backend-dev.log`
+- 前端日志写入 `out/_gui/frontend-dev.log`
+- 对 `http://127.0.0.1:<port>/healthz` 与 `http://127.0.0.1:<port>/courses/new/input` 做探活检查
 
 ## 目录结构
 

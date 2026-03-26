@@ -197,6 +197,41 @@ out/courses/<course_id>/runtime/llm_calls.jsonl
 
 ## Local Commands
 
+### One-Click Local Start
+
+仓库根目录现在提供一键本地联调脚本：
+
+```powershell
+.\start-gui-local.ps1
+```
+
+默认行为：
+
+- 清理 `3000/8000` 监听端口
+- 后端使用 `python -m uvicorn server.app.main:app --host 127.0.0.1 --port 8000`
+- 前端使用 `npm run dev -- --hostname 127.0.0.1 --port 3000`
+- 日志写入 `out/_gui/backend-dev.log` 与 `out/_gui/frontend-dev.log`
+- 轮询 `healthz` 与 `/courses/new/input`，只有两者都返回 `200` 才算启动成功
+
+常用可选参数：
+
+```powershell
+.\start-gui-local.ps1 `
+  -BackendPort 8100 `
+  -FrontendPort 3100 `
+  -SkipBackendInstall `
+  -SkipFrontendInstall `
+  -NoCleanPorts `
+  -HealthTimeoutSeconds 90
+```
+
+说明：
+
+- 默认 `WorkspaceRoot` 为脚本所在仓库根目录
+- `SkipBackendInstall` / `SkipFrontendInstall` 适合依赖已安装的重复启动
+- `NoCleanPorts` 适合你明确知道现有 `3000/8000` 服务应保留时使用
+- `DryRun` 只打印将执行的命令、日志路径和探活地址，不真正启动进程
+
 ### Frontend
 
 ```powershell
