@@ -734,6 +734,92 @@ class RunsApiTests(unittest.TestCase):
         self.assertEqual(payload["status"], "failed")
         self.assertEqual(len(self.runner.started_specs), 1)
 
+    def test_get_run_returns_failed_without_auto_resume_when_provider_config_is_missing_after_restart(self) -> None:
+        self._configure_openai_runtime(max_resume_attempts=2)
+        draft_payload = self.client.post(
+            "/course-drafts",
+            json={
+                "book_title": "Distributed Systems",
+                "subtitle_text": "# 第1章 概览\n\n本节介绍系统故障与恢复。",
+            },
+        ).json()
+        self.client.post(
+            f"/course-drafts/{draft_payload['id']}/config",
+            json={
+                "template_id": "interview-focus",
+                "content_density": "balanced",
+                "review_mode": "standard",
+                "export_package": True,
+                "provider": "openai",
+                "base_url": "https://api.openai.com/v1",
+                "simple_model": "gpt-5.4-mini",
+                "complex_model": "gpt-5.4",
+                "timeout_seconds": 180,
+            },
+        )
+        run_payload = self.client.post("/runs", json={"draft_id": draft_payload["id"]}).json()
+        run_id = run_payload["id"]
+        course_id = run_payload["course_id"]
+        self._write_runtime_files(
+            course_id=course_id,
+            course_name="Distributed Systems",
+            chapters={
+                "chapter-01": {
+                    "steps": {
+                        "ingest": {"status": "completed"},
+                        "curriculum_anchor": {
+                            "status": "failed",
+                            "attempt_count": 3,
+                            "last_error_kind": "http_status:429",
+                            "retry_history": [
+                                {"attempt": 1, "status": "error", "error_kind": "http_status:429", "will_retry": True},
+                                {"attempt": 2, "status": "error", "error_kind": "http_status:429", "will_retry": True},
+                                {"attempt": 3, "status": "error", "error_kind": "http_status:429", "will_retry": False},
+                            ],
+                        },
+                    }
+                }
+            },
+            last_error={"scope": "chapter-01", "step": "curriculum_anchor", "last_error_kind": "http_status:429"},
+        )
+        self.client.put(
+            "/gui-runtime-config",
+            json={
+                "default_provider": "openai",
+                "providers": {
+                    "openai": {
+                        "api_key": "",
+                        "base_url": "https://api.openai.com/v1",
+                        "simple_model": "gpt-5.4-mini",
+                        "complex_model": "gpt-5.4",
+                        "timeout_seconds": 180,
+                    },
+                    "openai_compatible": {},
+                    "anthropic": {},
+                },
+                "provider_policies": {
+                    "openai": {
+                        "max_concurrent_per_run": 2,
+                        "max_concurrent_global": 7,
+                        "max_call_attempts": 3,
+                        "max_resume_attempts": 2,
+                    }
+                },
+            },
+        )
+
+        restarted_runner = StubRunner()
+        restarted_client = TestClient(
+            create_app(output_root=self.output_root, run_runner=restarted_runner, gui_config_path=self.gui_config_path)
+        )
+
+        response = restarted_client.get(f"/runs/{run_id}")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(restarted_runner.started_specs, [])
+
     def test_get_run_exposes_multi_chapter_progress_while_keeping_legacy_stage_track(self) -> None:
         draft_payload = self.client.post(
             "/course-drafts",
@@ -1428,6 +1514,68 @@ class RunsApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(replacement_runner.started_specs[-1]["command"], "clean-course")
+
+    def test_failed_clean_run_does_not_trigger_auto_resume(self) -> None:
+        self._configure_openai_runtime(max_resume_attempts=2)
+        draft_payload = self.client.post(
+            "/course-drafts",
+            json={
+                "book_title": "Distributed Systems",
+                "subtitle_text": "# 第1章 概览\n\n本节介绍系统故障与恢复。",
+            },
+        ).json()
+        self.client.post(
+            f"/course-drafts/{draft_payload['id']}/config",
+            json={
+                "template_id": "interview-focus",
+                "content_density": "balanced",
+                "review_mode": "standard",
+                "export_package": True,
+                "provider": "openai",
+                "base_url": "https://api.openai.com/v1",
+                "simple_model": "gpt-5.4-mini",
+                "complex_model": "gpt-5.4",
+                "timeout_seconds": 180,
+            },
+        )
+        run_payload = self.client.post("/runs", json={"draft_id": draft_payload["id"]}).json()
+        run_id = run_payload["id"]
+        course_id = run_payload["course_id"]
+        self._write_runtime_files(
+            course_id=course_id,
+            course_name="Distributed Systems",
+            chapters={
+                "chapter-01": {
+                    "steps": {
+                        "ingest": {"status": "completed"},
+                        "curriculum_anchor": {
+                            "status": "failed",
+                            "attempt_count": 3,
+                            "last_error_kind": "network:timeout",
+                            "retry_history": [
+                                {"attempt": 1, "status": "error", "error_kind": "network:timeout", "will_retry": True},
+                                {"attempt": 2, "status": "error", "error_kind": "network:timeout", "will_retry": True},
+                                {"attempt": 3, "status": "error", "error_kind": "network:timeout", "will_retry": False},
+                            ],
+                        },
+                    }
+                }
+            },
+            last_error={"scope": "chapter-01", "step": "curriculum_anchor", "last_error_kind": "network:timeout"},
+        )
+        self.runner.snapshots[run_id] = {"status": "completed", "last_error": None}
+
+        clean_response = self.client.post(f"/runs/{run_id}/clean")
+        self.assertEqual(clean_response.status_code, 200)
+
+        self.runner.snapshots[run_id] = {"status": "failed", "last_error": "clean failed"}
+
+        response = self.client.get(f"/runs/{run_id}")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual([spec["command"] for spec in self.runner.started_specs], ["run-course", "clean-course"])
 
     def test_clean_run_recovers_to_cleaned_after_restart_when_course_runtime_is_gone(self) -> None:
         draft_id = self.client.post(

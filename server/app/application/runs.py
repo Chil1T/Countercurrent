@@ -402,12 +402,20 @@ class RunService:
         return None
 
     def _should_auto_resume(self, *, record: _RunRecord, status: str, runtime: RuntimeSnapshot | None) -> bool:
-        if status != "failed" or record.session.run_kind != "chapter" or runtime is None:
+        if (
+            status != "failed"
+            or record.session.run_kind != "chapter"
+            or runtime is None
+            or record.last_command == "clean-course"
+        ):
             return False
         draft = self._course_drafts.get_draft(record.session.draft_id)
         if draft is None:
             return False
-        runtime_config = self._resolve_runtime_config(draft)
+        try:
+            runtime_config = self._resolve_runtime_config(draft)
+        except RunConfigurationError:
+            return False
         if record.auto_resume_attempt_count >= runtime_config.max_resume_attempts:
             return False
         return self._is_transient_error_kind(runtime.last_error_kind, runtime_config)
@@ -419,7 +427,10 @@ class RunService:
         with self._course_lock(record.session.course_id):
             self._ensure_mutable(record.session.id)
             self._ensure_course_idle(record.session.course_id, exclude_run_id=record.session.id)
-            runtime_config = self._resolve_runtime_config(draft)
+            try:
+                runtime_config = self._resolve_runtime_config(draft)
+            except RunConfigurationError:
+                return
             if record.auto_resume_attempt_count >= runtime_config.max_resume_attempts:
                 return
             record.auto_resume_attempt_count += 1
