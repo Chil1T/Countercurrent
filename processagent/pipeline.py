@@ -18,9 +18,12 @@ from .llm import LLMBackend
 from .provider_policy import (
     ProviderExecutionPolicy,
     ProviderPermitRegistry,
+    build_coordination_owner_payload,
     get_builtin_provider_policy,
     get_provider_coordination_root,
     get_service_coordination_root,
+    release_owned_directory,
+    try_acquire_owned_directory,
 )
 
 REQUIRED_PACK_FILES = (
@@ -88,25 +91,13 @@ T = TypeVar("T")
 def _acquire_course_run_slot(*, coordination_root: Path, course_id: str):
     lock_dir = coordination_root / course_id
     lock_dir.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        lock_dir.mkdir(parents=False, exist_ok=False)
-    except FileExistsError as error:
-        raise RuntimeError(f"course {course_id} already has an active run") from error
-    (lock_dir / "owner.json").write_text(
-        json.dumps(
-            {
-                "course_id": course_id,
-                "acquired_at": time.time(),
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    owner_payload = build_coordination_owner_payload({"course_id": course_id, "kind": "course-run-lock"})
+    if not try_acquire_owned_directory(lock_dir, owner_payload=owner_payload):
+        raise RuntimeError(f"course {course_id} already has an active run")
     try:
         yield
     finally:
-        shutil.rmtree(lock_dir, ignore_errors=True)
+        release_owned_directory(lock_dir)
 
 
 def reset_pipeline_runtime_registries() -> None:

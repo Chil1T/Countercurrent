@@ -608,6 +608,40 @@ class PipelineRunnerTest(unittest.TestCase):
             self.assertEqual(len(second_errors), 1)
             self.assertIsInstance(second_errors[0], RuntimeError)
 
+    def test_stale_course_run_lock_is_reclaimed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            coordination_root = root / "coordination"
+            self._use_shared_coordination_root(coordination_root)
+            output_dir = root / "out"
+            runner = self._make_runner_with_tracking_backend(
+                root=root,
+                course_name="数据库系统概论-陈旧锁",
+                output_dir=output_dir,
+                probe=ConcurrentStageProbe(),
+                provider_name="stub",
+                policy=ProviderExecutionPolicy(
+                    provider="stub",
+                    max_concurrent_per_run=1,
+                    max_concurrent_global=1,
+                    transient_http_statuses=(),
+                    max_call_attempts=1,
+                    max_resume_attempts=1,
+                ),
+            )
+            course_id = runner.course_blueprint["course_id"]
+            lock_dir = coordination_root / "course_run_locks" / course_id
+            lock_dir.mkdir(parents=True)
+            (lock_dir / "owner.json").write_text(
+                json.dumps({"course_id": course_id, "pid": 99999999, "acquired_at": 0}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            runner.run()
+
+            self.assertFalse(lock_dir.exists())
+            self.assertTrue((runner.course_dir / "runtime_state.json").exists())
+
     def test_concurrent_llm_logging_keeps_per_call_metadata_isolated(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

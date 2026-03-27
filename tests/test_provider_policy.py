@@ -1,6 +1,11 @@
 import importlib
 import importlib.util
+import json
+import shutil
+import tempfile
+import threading
 import unittest
+from pathlib import Path
 
 from server.app.models.gui_runtime_config import GuiRuntimeConfig
 
@@ -116,6 +121,76 @@ class ProviderPolicyTests(unittest.TestCase):
                         provider="openai",
                         cli_overrides={"max_call_attempts": invalid_value},
                     )
+
+    def test_provider_limit_recovers_from_corrupt_limit_file(self) -> None:
+        module = self._load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = module.ProviderPermitRegistry(root_dir=Path(tmp))
+            provider_dir = Path(tmp) / "stub"
+            provider_dir.mkdir(parents=True)
+            (provider_dir / "limit.json").write_text("{", encoding="utf-8")
+            policy = module.ProviderExecutionPolicy(
+                provider="stub",
+                max_concurrent_per_run=1,
+                max_concurrent_global=2,
+                transient_http_statuses=(),
+                max_call_attempts=1,
+                max_resume_attempts=1,
+            )
+
+            with registry.acquire(policy):
+                self.assertEqual(registry.active_permits("stub"), 1)
+
+            self.assertEqual(
+                json.loads((provider_dir / "limit.json").read_text(encoding="utf-8"))["max_concurrent_global"],
+                2,
+            )
+
+    def test_stale_provider_permit_slot_is_reclaimed(self) -> None:
+        module = self._load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root_dir = Path(tmp)
+            registry = module.ProviderPermitRegistry(root_dir=root_dir, poll_interval_seconds=0.01)
+            provider_dir = root_dir / "stub"
+            slot_dir = provider_dir / "slot-00"
+            slot_dir.mkdir(parents=True)
+            (provider_dir / "limit.json").write_text(
+                json.dumps({"max_concurrent_global": 1}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (slot_dir / "owner.json").write_text(
+                json.dumps({"pid": 99999999, "acquired_at": 0}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            policy = module.ProviderExecutionPolicy(
+                provider="stub",
+                max_concurrent_per_run=1,
+                max_concurrent_global=1,
+                transient_http_statuses=(),
+                max_call_attempts=1,
+                max_resume_attempts=1,
+            )
+
+            entered = threading.Event()
+            errors: list[Exception] = []
+
+            def target() -> None:
+                try:
+                    with registry.acquire(policy):
+                        entered.set()
+                except Exception as error:
+                    errors.append(error)
+
+            worker = threading.Thread(target=target, daemon=True)
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(timeout=1), "stale provider slot was not reclaimed")
+            finally:
+                if worker.is_alive():
+                    shutil.rmtree(slot_dir, ignore_errors=True)
+                    worker.join(timeout=1)
+
+            self.assertEqual(errors, [])
 
 
 if __name__ == "__main__":
