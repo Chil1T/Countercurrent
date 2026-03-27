@@ -2,12 +2,21 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class StageStatus(BaseModel):
     name: str
     status: str
+
+
+class ChapterProgress(BaseModel):
+    chapter_id: str
+    status: str
+    current_step: str | None = None
+    completed_step_count: int = 0
+    total_step_count: int = 0
+    export_ready: bool = False
 
 
 class CreateRunRequest(BaseModel):
@@ -32,6 +41,7 @@ class RunSession(BaseModel):
     review_enabled: bool = False
     review_mode: str | None = None
     stages: list[StageStatus]
+    chapter_progress: list[ChapterProgress] = Field(default_factory=list)
     last_error: str | None = None
 
 

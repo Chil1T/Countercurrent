@@ -4,7 +4,7 @@ import json
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from processagent.cli import normalize_base_url
@@ -15,7 +15,7 @@ from server.app.adapters.gui_config_store import GuiConfigStore
 from server.app.adapters.runtime_reader import RuntimeSnapshot, RuntimeStateReader
 from server.app.application.course_drafts import CourseDraftService
 from server.app.models.gui_runtime_config import ProviderName
-from server.app.models.run_session import CreateRunRequest, RunLogChunk, RunLogPreview, RunSession, StageStatus
+from server.app.models.run_session import ChapterProgress, CreateRunRequest, RunLogChunk, RunLogPreview, RunSession, StageStatus
 
 CHAPTER_STAGE_PREFIX = [
     "build_blueprint",
@@ -61,6 +61,7 @@ class RunConfigurationError(RuntimeError):
 class _RunRecord:
     session: RunSession
     last_command: Literal["run-course", "resume-course", "clean-course", "build-global"] = "run-course"
+    auto_resume_attempt_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -164,34 +165,9 @@ class RunService:
             self._ensure_mutable(record.session.id)
             self._ensure_course_idle(record.session.course_id, exclude_run_id=run_id)
             runtime_config = self._resolve_runtime_config(draft)
-            record.session = record.session.model_copy(
-                update={
-                    "backend": runtime_config.backend,
-                    "hosted": runtime_config.hosted,
-                    "base_url": runtime_config.base_url,
-                    "simple_model": runtime_config.simple_model,
-                    "complex_model": runtime_config.complex_model,
-                    "timeout_seconds": runtime_config.timeout_seconds,
-                    "last_error": None,
-                }
-            )
-            input_dir = None
-            command: Literal["resume-course", "build-global"] = "resume-course"
-            if record.session.run_kind == "chapter":
-                input_dir = self._course_drafts.get_runtime_input_dir(record.session.draft_id)
-                if input_dir is None:
-                    raise DraftNotReadyError("Course draft is not ready to run")
-            else:
-                command = "build-global"
-            self._start_process(
-                record=record,
-                command=command,
-                book_title=draft.book_title,
-                input_dir=input_dir,
-                runtime_config=runtime_config,
-            )
+            self._resume_record(record, draft, runtime_config)
             self._persist_record(record)
-            return self.get_run(run_id)
+            return self._refresh_run_record(record, allow_auto_resume=False)
 
     def clean_run(self, run_id: str) -> RunSession | None:
         record = self._runs.get(run_id) or self._load_record(run_id)
@@ -216,10 +192,18 @@ class RunService:
         if record is None:
             return None
         self._runs[run_id] = record
+        return self._refresh_run_record(record, allow_auto_resume=True)
 
-        snapshot = self._runner.snapshot(run_id)
+    def _refresh_run_record(self, record: _RunRecord, *, allow_auto_resume: bool) -> RunSession:
+        snapshot = self._runner.snapshot(record.session.id)
         runtime = self._runtime_reader.read(record.session.course_id)
         status = self._resolve_status(record=record, snapshot=snapshot, runtime=runtime)
+        if allow_auto_resume and self._should_auto_resume(record=record, status=status, runtime=runtime):
+            self._auto_resume(record)
+            snapshot = self._runner.snapshot(record.session.id)
+            runtime = self._runtime_reader.read(record.session.course_id)
+            status = self._resolve_status(record=record, snapshot=snapshot, runtime=runtime)
+        chapter_progress = self._map_chapter_progress(runtime=runtime, run_status=status, session=record.session)
         last_error = self._fallback_last_error(record=record, status=status, snapshot=snapshot, runtime=runtime)
         stages = self._map_stages(
             runtime=runtime,
@@ -228,11 +212,13 @@ class RunService:
             run_kind=record.session.run_kind,
             review_enabled=record.session.review_enabled,
             target_output=record.session.target_output,
+            chapter_progress=chapter_progress,
         )
         updated = record.session.model_copy(
             update={
                 "status": status,
                 "stages": stages,
+                "chapter_progress": chapter_progress,
                 "last_error": last_error,
             }
         )
@@ -311,6 +297,7 @@ class RunService:
         run_kind: Literal["chapter", "global"],
         review_enabled: bool,
         target_output: str | None,
+        chapter_progress: list[ChapterProgress] | None = None,
     ) -> list[StageStatus]:
         stage_names = _stage_names_for(run_kind, review_enabled, target_output)
         if last_command == "clean-course" and run_status in {"running", "cleaned"}:
@@ -340,8 +327,62 @@ class RunService:
             pending = next((name for name in stage_names if statuses[name] == "pending"), None)
             if pending is not None:
                 statuses[pending] = "failed" if run_status == "failed" else "running"
+            elif chapter_progress:
+                current_step = next(
+                    (item.current_step for item in chapter_progress if item.current_step and item.current_step in statuses),
+                    None,
+                )
+                if current_step is not None:
+                    statuses[current_step] = "failed" if run_status == "failed" else "running"
 
         return [StageStatus(name=name, status=statuses[name]) for name in stage_names]
+
+    def _map_chapter_progress(
+        self,
+        *,
+        runtime: RuntimeSnapshot | None,
+        run_status: str,
+        session: RunSession,
+    ) -> list[ChapterProgress]:
+        if session.run_kind != "chapter" or runtime is None:
+            return []
+
+        required_steps = _stage_names_for("chapter", session.review_enabled, session.target_output)[1:]
+        chapter_progress: list[ChapterProgress] = []
+        for chapter_id, chapter_state in runtime.chapter_states.items():
+            steps = chapter_state.steps
+            completed_step_count = sum(1 for step_name in required_steps if steps.get(step_name, {}).get("status") == "completed")
+            failed_step = next((step_name for step_name in required_steps if steps.get(step_name, {}).get("status") == "failed"), None)
+            running_step = next((step_name for step_name in required_steps if steps.get(step_name, {}).get("status") == "running"), None)
+            pending_step = next((step_name for step_name in required_steps if step_name not in steps), None)
+            chapter_status = "pending"
+            current_step = None
+            if completed_step_count >= len(required_steps) and required_steps:
+                chapter_status = "completed"
+            elif failed_step is not None:
+                chapter_status = "running" if run_status == "running" else "failed"
+                current_step = failed_step
+            elif running_step is not None:
+                chapter_status = "running"
+                current_step = running_step
+            elif completed_step_count > 0:
+                chapter_status = "running"
+                current_step = pending_step
+            elif pending_step is not None and run_status == "running":
+                chapter_status = "running"
+                current_step = pending_step
+
+            chapter_progress.append(
+                ChapterProgress(
+                    chapter_id=chapter_id,
+                    status=chapter_status,
+                    current_step=current_step,
+                    completed_step_count=completed_step_count,
+                    total_step_count=len(required_steps),
+                    export_ready=completed_step_count >= len(required_steps) and len(required_steps) > 0,
+                )
+            )
+        return chapter_progress
 
     @staticmethod
     def _snapshot_value(snapshot, key: str):
@@ -359,6 +400,31 @@ class RunService:
         if fallback_path.exists() and fallback_path.is_file():
             return fallback_path
         return None
+
+    def _should_auto_resume(self, *, record: _RunRecord, status: str, runtime: RuntimeSnapshot | None) -> bool:
+        if status != "failed" or record.session.run_kind != "chapter" or runtime is None:
+            return False
+        draft = self._course_drafts.get_draft(record.session.draft_id)
+        if draft is None:
+            return False
+        runtime_config = self._resolve_runtime_config(draft)
+        if record.auto_resume_attempt_count >= runtime_config.max_resume_attempts:
+            return False
+        return self._is_transient_error_kind(runtime.last_error_kind, runtime_config)
+
+    def _auto_resume(self, record: _RunRecord) -> None:
+        draft = self._course_drafts.get_draft(record.session.draft_id)
+        if draft is None:
+            return
+        with self._course_lock(record.session.course_id):
+            self._ensure_mutable(record.session.id)
+            self._ensure_course_idle(record.session.course_id, exclude_run_id=record.session.id)
+            runtime_config = self._resolve_runtime_config(draft)
+            if record.auto_resume_attempt_count >= runtime_config.max_resume_attempts:
+                return
+            record.auto_resume_attempt_count += 1
+            self._resume_record(record, draft, runtime_config)
+            self._persist_record(record)
 
     def _resolve_status(self, record: _RunRecord, snapshot, runtime: RuntimeSnapshot | None) -> str:
         runner_status = self._snapshot_value(snapshot, "status")
@@ -396,10 +462,43 @@ class RunService:
         if snapshot_error:
             return snapshot_error
         if runtime is not None and runtime.last_error:
-            return runtime.last_error
+            return RunService._format_runtime_last_error(runtime.last_error)
         if record.session.status == "running":
             return "Runner snapshot unavailable after service restart; previous run is treated as failed"
         return None
+
+    @staticmethod
+    def _format_runtime_last_error(last_error: dict[str, Any] | str) -> str:
+        if isinstance(last_error, str):
+            return last_error
+        scope = last_error.get("scope")
+        step = last_error.get("step")
+        kind = last_error.get("last_error_kind")
+        parts = [part for part in (scope, step) if part]
+        if kind and parts:
+            return f"{'.'.join(parts)} failed ({kind})"
+        if parts:
+            return f"{'.'.join(parts)} failed"
+        if kind:
+            return str(kind)
+        return json.dumps(last_error, ensure_ascii=False)
+
+    @staticmethod
+    def _is_transient_error_kind(last_error_kind: str | None, runtime_config: _ResolvedRuntimeConfig) -> bool:
+        if last_error_kind is None:
+            return False
+        if last_error_kind.startswith("network:"):
+            return True
+        if "recoverable" in last_error_kind or last_error_kind.startswith("transient_"):
+            return True
+        if last_error_kind.startswith("http_status:"):
+            try:
+                status_code = int(last_error_kind.split(":", 1)[1])
+            except ValueError:
+                return False
+            policy = resolve_provider_execution_policy(provider=runtime_config.backend)
+            return status_code in policy.transient_http_statuses
+        return False
 
     @staticmethod
     def _runtime_is_complete(
@@ -434,7 +533,7 @@ class RunService:
                 continue
             if record.session.course_id != course_id:
                 continue
-            run = self.get_run(record.session.id)
+            run = self._refresh_run_record(record, allow_auto_resume=False)
             if run is not None and run.status == "running":
                 raise RunConflictError(f"Run already in progress for course: {course_id}")
 
@@ -491,6 +590,34 @@ class RunService:
                 max_call_attempts=None if (is_clean or runtime_config is None) else runtime_config.max_call_attempts,
                 max_resume_attempts=None if (is_clean or runtime_config is None) else runtime_config.max_resume_attempts,
             )
+        )
+
+    def _resume_record(self, record: _RunRecord, draft, runtime_config: _ResolvedRuntimeConfig) -> None:
+        record.session = record.session.model_copy(
+            update={
+                "backend": runtime_config.backend,
+                "hosted": runtime_config.hosted,
+                "base_url": runtime_config.base_url,
+                "simple_model": runtime_config.simple_model,
+                "complex_model": runtime_config.complex_model,
+                "timeout_seconds": runtime_config.timeout_seconds,
+                "last_error": None,
+            }
+        )
+        input_dir = None
+        command: Literal["resume-course", "build-global"] = "resume-course"
+        if record.session.run_kind == "chapter":
+            input_dir = self._course_drafts.get_runtime_input_dir(record.session.draft_id)
+            if input_dir is None:
+                raise DraftNotReadyError("Course draft is not ready to run")
+        else:
+            command = "build-global"
+        self._start_process(
+            record=record,
+            command=command,
+            book_title=draft.book_title,
+            input_dir=input_dir,
+            runtime_config=runtime_config,
         )
 
     @staticmethod
@@ -607,6 +734,7 @@ class RunService:
                 {
                     "session": record.session.model_dump(),
                     "last_command": record.last_command,
+                    "auto_resume_attempt_count": record.auto_resume_attempt_count,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -622,4 +750,5 @@ class RunService:
         return _RunRecord(
             session=RunSession.model_validate(payload["session"]),
             last_command=payload.get("last_command", "run-course"),
+            auto_resume_attempt_count=int(payload.get("auto_resume_attempt_count", 0) or 0),
         )

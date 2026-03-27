@@ -3,6 +3,30 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+
+from processagent.pipeline import WRITER_STAGE_SETS
+
+CHAPTER_BASE_STEPS = (
+    "ingest",
+    "curriculum_anchor",
+    "gap_fill",
+    "pack_plan",
+)
+OPTIONAL_CHAPTER_STEPS = (
+    "write_lecture_note",
+    "write_terms",
+    "write_interview_qa",
+    "write_cross_links",
+    "write_open_questions",
+    "review",
+)
+
+
+@dataclass(frozen=True)
+class ChapterRuntimeSnapshot:
+    chapter_id: str
+    steps: dict[str, dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -11,7 +35,11 @@ class RuntimeSnapshot:
     completed_steps: dict[str, int]
     blueprint_ready: bool
     global_steps: dict[str, bool]
-    last_error: str | None
+    last_error: dict[str, Any] | str | None
+    last_error_kind: str | None
+    chapter_states: dict[str, ChapterRuntimeSnapshot]
+    target_output: str | None
+    review_enabled: bool
 
 
 class RuntimeStateReader:
@@ -28,25 +56,31 @@ class RuntimeStateReader:
         blueprint = json.loads(blueprint_path.read_text(encoding="utf-8"))
         runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
         runtime_chapters = runtime.get("chapters", {})
-        completed_steps = {
-            "ingest": 0,
-            "curriculum_anchor": 0,
-            "gap_fill": 0,
-            "pack_plan": 0,
-            "write_lecture_note": 0,
-            "write_terms": 0,
-            "write_interview_qa": 0,
-            "write_cross_links": 0,
-            "write_open_questions": 0,
-            "review": 0,
-        }
+        run_identity = runtime.get("run_identity", {})
+        target_output = run_identity.get("target_output") or blueprint.get("policy", {}).get("target_output")
+        review_enabled = bool(run_identity.get("review_enabled", False))
+        writer_steps = WRITER_STAGE_SETS.get(target_output or "interview_knowledge_base", WRITER_STAGE_SETS["interview_knowledge_base"])
+        tracked_steps = (*CHAPTER_BASE_STEPS, *writer_steps)
+        if review_enabled:
+            tracked_steps = (*tracked_steps, "review")
+        completed_steps = {step_name: 0 for step_name in (*CHAPTER_BASE_STEPS, *OPTIONAL_CHAPTER_STEPS)}
+        chapter_states: dict[str, ChapterRuntimeSnapshot] = {}
 
-        for chapter_state in runtime_chapters.values():
+        for chapter_id in self._ordered_chapter_ids(blueprint, runtime_chapters):
+            chapter_state = runtime_chapters.get(chapter_id, {})
             steps = chapter_state.get("steps", {})
-            for step_name in completed_steps:
-                if steps.get(step_name, {}).get("status") == "completed":
-                    completed_steps[step_name] += 1
+            normalized_steps = {
+                step_name: dict(step_payload)
+                for step_name, step_payload in steps.items()
+                if isinstance(step_payload, dict)
+            }
+            chapter_states[chapter_id] = ChapterRuntimeSnapshot(chapter_id=chapter_id, steps=normalized_steps)
+            for step_name in tracked_steps:
+                if normalized_steps.get(step_name, {}).get("status") == "completed":
+                    completed_steps[step_name] = completed_steps.get(step_name, 0) + 1
 
+        last_error = runtime.get("last_error")
+        last_error_kind = self._resolve_last_error_kind(last_error, chapter_states)
         return RuntimeSnapshot(
             chapter_count=len(runtime_chapters),
             completed_steps=completed_steps,
@@ -55,5 +89,39 @@ class RuntimeStateReader:
                 "build_global_glossary": runtime.get("global", {}).get("build_global_glossary", {}).get("status") == "completed",
                 "build_interview_index": runtime.get("global", {}).get("build_interview_index", {}).get("status") == "completed",
             },
-            last_error=runtime.get("last_error"),
+            last_error=last_error,
+            last_error_kind=last_error_kind,
+            chapter_states=chapter_states,
+            target_output=target_output,
+            review_enabled=review_enabled,
         )
+
+    @staticmethod
+    def _ordered_chapter_ids(blueprint: dict[str, Any], runtime_chapters: dict[str, Any]) -> list[str]:
+        ordered = [
+            chapter.get("chapter_id")
+            for chapter in blueprint.get("chapters", [])
+            if isinstance(chapter, dict) and chapter.get("chapter_id")
+        ]
+        for chapter_id in runtime_chapters:
+            if chapter_id not in ordered:
+                ordered.append(chapter_id)
+        return ordered
+
+    @staticmethod
+    def _resolve_last_error_kind(
+        last_error: dict[str, Any] | str | None,
+        chapter_states: dict[str, ChapterRuntimeSnapshot],
+    ) -> str | None:
+        if isinstance(last_error, dict):
+            kind = last_error.get("last_error_kind")
+            if kind:
+                return str(kind)
+            scope = last_error.get("scope")
+            step = last_error.get("step")
+            if scope and step:
+                return chapter_states.get(str(scope), ChapterRuntimeSnapshot(chapter_id=str(scope), steps={})).steps.get(
+                    str(step),
+                    {},
+                ).get("last_error_kind")
+        return None
