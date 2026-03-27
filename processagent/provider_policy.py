@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
+import os
+import shutil
+import time
 from argparse import Namespace
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from threading import BoundedSemaphore, Lock
+from pathlib import Path
 from typing import Any, Mapping
 
 DEFAULT_TRANSIENT_HTTP_STATUSES = (408, 425, 429, 500, 502, 503, 504)
@@ -69,73 +73,100 @@ BUILTIN_PROVIDER_EXECUTION_POLICIES: dict[str, ProviderExecutionPolicy] = {
 }
 
 
-@dataclass
-class _ProviderPermitState:
-    limit: int
-    semaphore: BoundedSemaphore
-    active_permits: int = 0
-
-
 class ProviderPermitRegistry:
-    def __init__(self) -> None:
-        self._lock = Lock()
-        self._states: dict[str, _ProviderPermitState] = {}
+    def __init__(self, *, root_dir: Path, poll_interval_seconds: float = 0.01) -> None:
+        self.root_dir = root_dir
+        self.poll_interval_seconds = poll_interval_seconds
 
     @contextmanager
     def acquire(self, policy: ProviderExecutionPolicy):
-        state = self._get_or_create_state(policy)
-        state.semaphore.acquire()
-        with self._lock:
-            state.active_permits += 1
+        slot_dir = self._acquire_slot(policy)
         try:
             yield
         finally:
-            with self._lock:
-                state.active_permits -= 1
-            state.semaphore.release()
+            self._release_slot(slot_dir)
 
     def active_permits(self, provider: str) -> int:
-        with self._lock:
-            state = self._states.get(provider)
-            if state is None:
-                return 0
-            return state.active_permits
+        provider_dir = self.root_dir / provider
+        if not provider_dir.exists():
+            return 0
+        return sum(1 for path in provider_dir.iterdir() if path.is_dir() and path.name.startswith("slot-"))
 
     def reset(self) -> None:
-        with self._lock:
-            self._states.clear()
+        if self.root_dir.exists():
+            shutil.rmtree(self.root_dir)
 
-    def _get_or_create_state(self, policy: ProviderExecutionPolicy) -> _ProviderPermitState:
-        with self._lock:
-            state = self._states.get(policy.provider)
-            if state is None or (state.limit != policy.max_concurrent_global and state.active_permits == 0):
-                state = _ProviderPermitState(
-                    limit=policy.max_concurrent_global,
-                    semaphore=BoundedSemaphore(policy.max_concurrent_global),
-                )
-                self._states[policy.provider] = state
-                return state
-            if state.limit != policy.max_concurrent_global:
-                raise RuntimeError(
-                    "provider global concurrency limit cannot change while permits are active: "
-                    f"{policy.provider} {state.limit} -> {policy.max_concurrent_global}"
-                )
-            return state
+    def _acquire_slot(self, policy: ProviderExecutionPolicy) -> Path:
+        provider_dir = self.root_dir / policy.provider
+        configured_limit = self._ensure_provider_limit(provider_dir, policy)
+        owner_payload = self._build_owner_payload()
+
+        while True:
+            for slot_index in range(configured_limit):
+                slot_dir = provider_dir / f"slot-{slot_index:02d}"
+                try:
+                    slot_dir.mkdir(parents=False, exist_ok=False)
+                except FileExistsError:
+                    continue
+                self._write_owner_payload(slot_dir, owner_payload)
+                return slot_dir
+            time.sleep(self.poll_interval_seconds)
+
+    def _release_slot(self, slot_dir: Path) -> None:
+        if not slot_dir.exists():
+            return
+        shutil.rmtree(slot_dir, ignore_errors=True)
+
+    def _ensure_provider_limit(self, provider_dir: Path, policy: ProviderExecutionPolicy) -> int:
+        provider_dir.mkdir(parents=True, exist_ok=True)
+        limit_path = provider_dir / "limit.json"
+        requested_limit = policy.max_concurrent_global
+        payload = json.dumps({"max_concurrent_global": requested_limit}, ensure_ascii=False)
+
+        while True:
+            if limit_path.exists():
+                current_limit = json.loads(limit_path.read_text(encoding="utf-8")).get("max_concurrent_global")
+                if current_limit == requested_limit:
+                    return requested_limit
+                if self.active_permits(policy.provider) > 0:
+                    raise RuntimeError(
+                        "provider global concurrency limit cannot change while permits are active: "
+                        f"{policy.provider} {current_limit} -> {requested_limit}"
+                    )
+                limit_path.write_text(payload, encoding="utf-8")
+                return requested_limit
+            try:
+                with limit_path.open("x", encoding="utf-8") as handle:
+                    handle.write(payload)
+                return requested_limit
+            except FileExistsError:
+                continue
+
+    def _build_owner_payload(self) -> dict[str, Any]:
+        return {
+            "pid": os.getpid(),
+            "acquired_at": time.time(),
+        }
+
+    def _write_owner_payload(self, slot_dir: Path, payload: dict[str, Any]) -> None:
+        (slot_dir / "owner.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
 
-_GLOBAL_PROVIDER_PERMIT_REGISTRY = ProviderPermitRegistry()
+def acquire_provider_permit(policy: ProviderExecutionPolicy, *, coordination_root: Path):
+    return ProviderPermitRegistry(root_dir=coordination_root).acquire(policy)
 
 
-def acquire_provider_permit(policy: ProviderExecutionPolicy):
-    return _GLOBAL_PROVIDER_PERMIT_REGISTRY.acquire(policy)
+def get_provider_active_permits(provider: str, *, coordination_root: Path) -> int:
+    return ProviderPermitRegistry(root_dir=coordination_root).active_permits(provider)
 
 
-def get_provider_active_permits(provider: str) -> int:
-    return _GLOBAL_PROVIDER_PERMIT_REGISTRY.active_permits(provider)
-
-
-def reset_provider_permit_registry() -> None:
-    _GLOBAL_PROVIDER_PERMIT_REGISTRY.reset()
+def reset_provider_permit_registry(*, coordination_root: Path | None = None) -> None:
+    if coordination_root is None:
+        return
+    ProviderPermitRegistry(root_dir=coordination_root).reset()
 
 
 def get_builtin_provider_policy(provider: str) -> ProviderExecutionPolicy:

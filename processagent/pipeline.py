@@ -8,14 +8,14 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Lock
+from threading import local
 from typing import Any, Callable, TypeVar
 
 from .blueprint import match_chapter_for_transcript, save_blueprint
 from .bootstrap import bootstrap_course_blueprint
 from .chapter_execution import ChapterExecutionPlanner, ChapterExecutionScheduler, ChapterWorker, RuntimeStateMutationGuard
 from .llm import LLMBackend
-from .provider_policy import ProviderExecutionPolicy, acquire_provider_permit, get_builtin_provider_policy, reset_provider_permit_registry
+from .provider_policy import ProviderExecutionPolicy, ProviderPermitRegistry, get_builtin_provider_policy
 
 REQUIRED_PACK_FILES = (
     "01-精讲.md",
@@ -75,28 +75,36 @@ EXECUTION_STRATEGY = {
     "global_consolidation": "serial",
 }
 
-_ACTIVE_COURSE_RUNS_LOCK = Lock()
-_ACTIVE_COURSE_RUNS: set[str] = set()
 T = TypeVar("T")
 
 
 @contextmanager
-def _acquire_course_run_slot(course_id: str):
-    with _ACTIVE_COURSE_RUNS_LOCK:
-        if course_id in _ACTIVE_COURSE_RUNS:
-            raise RuntimeError(f"course {course_id} already has an active run")
-        _ACTIVE_COURSE_RUNS.add(course_id)
+def _acquire_course_run_slot(*, output_dir: Path, course_id: str):
+    lock_dir = output_dir / "runtime" / "course_run_locks" / course_id
+    lock_dir.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        lock_dir.mkdir(parents=False, exist_ok=False)
+    except FileExistsError as error:
+        raise RuntimeError(f"course {course_id} already has an active run") from error
+    (lock_dir / "owner.json").write_text(
+        json.dumps(
+            {
+                "course_id": course_id,
+                "acquired_at": time.time(),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     try:
         yield
     finally:
-        with _ACTIVE_COURSE_RUNS_LOCK:
-            _ACTIVE_COURSE_RUNS.discard(course_id)
+        shutil.rmtree(lock_dir, ignore_errors=True)
 
 
 def reset_pipeline_runtime_registries() -> None:
-    with _ACTIVE_COURSE_RUNS_LOCK:
-        _ACTIVE_COURSE_RUNS.clear()
-    reset_provider_permit_registry()
+    return None
 
 
 @dataclass
@@ -265,6 +273,9 @@ class PipelineRunner:
         self.ingest_agent = IngestAgent()
         self.pack_writer_files = PACK_WRITER_FILES
         self.provider_policy = self.config.provider_policy or get_builtin_provider_policy(self.config.backend_name)
+        self.provider_permit_registry = ProviderPermitRegistry(
+            root_dir=self.config.output_dir / "runtime" / "provider_permits"
+        )
         self.course_blueprint = self.config.course_blueprint or bootstrap_course_blueprint(
             input_dir=self.config.input_dir,
             book_title=self.config.input_dir.name or "未命名课程",
@@ -298,7 +309,10 @@ class PipelineRunner:
         )
 
     def run(self) -> None:
-        with _acquire_course_run_slot(self.course_blueprint["course_id"]):
+        with _acquire_course_run_slot(
+            output_dir=self.config.output_dir,
+            course_id=self.course_blueprint["course_id"],
+        ):
             if self.config.clean_output and self.course_dir.exists():
                 shutil.rmtree(self.course_dir)
                 self.runtime_state.clear()
@@ -799,13 +813,13 @@ class PipelineRunner:
     def _run_hosted_stage(self, agent_name: str, operation: Callable[[], T]) -> T:
         if agent_name not in HOSTED_PRESSURE_STAGES:
             return operation()
-        with acquire_provider_permit(self.provider_policy):
+        with self.provider_permit_registry.acquire(self.provider_policy):
             return operation()
 
 
 class HeuristicLLMBackend:
     def __init__(self) -> None:
-        self._last_call_metadata: dict[str, Any] | None = None
+        self._call_metadata = local()
 
     def generate_json(
         self,
@@ -859,12 +873,12 @@ class HeuristicLLMBackend:
         raise KeyError(f"Unsupported text agent: {agent_name}")
 
     def consume_last_call_metadata(self) -> dict[str, Any] | None:
-        metadata = self._last_call_metadata
-        self._last_call_metadata = None
+        metadata = getattr(self._call_metadata, "value", None)
+        self._call_metadata.value = None
         return metadata
 
     def _remember_call(self, payload: dict[str, Any], response: dict[str, Any] | str, model_override: str | None) -> None:
-        self._last_call_metadata = {
+        self._call_metadata.value = {
             "provider": "heuristic",
             "model": model_override,
             "input_tokens": max(1, len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) // 4),

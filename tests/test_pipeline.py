@@ -305,6 +305,78 @@ class TrackingLLMBackend:
         raise KeyError(f"Unsupported JSON agent: {agent_name}")
 
 
+class MetadataRaceHeuristicBackend(HeuristicLLMBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self._arrival_lock = threading.Lock()
+        self._arrival_order: list[str] = []
+        self._second_ready = threading.Event()
+        self._first_consume_done = threading.Event()
+        self._writer_file_map = {
+            "write_lecture_note": "01-精讲.md",
+            "write_terms": "02-术语与定义.md",
+            "write_interview_qa": "03-面试问答.md",
+            "write_cross_links": "04-跨章关联.md",
+            "write_open_questions": "05-疑点与待核.md",
+        }
+        self._consume_count = 0
+
+    def generate_json(
+        self,
+        agent_name: str,
+        prompt: str,
+        payload: dict[str, Any],
+        model_override: str | None = None,
+    ) -> dict[str, Any]:
+        if agent_name == "curriculum_anchor":
+            chapter_id = payload["chapter_blueprint"]["chapter_id"]
+            response = {"chapter_summary": chapter_id, "anchors": []}
+            self._remember_call(payload, response, chapter_id)
+            order = self._register_arrival(chapter_id)
+            if order == 0:
+                self._second_ready.wait(timeout=2)
+                return response
+            self._second_ready.set()
+            self._first_consume_done.wait(timeout=2)
+            return response
+        if agent_name == "gap_fill":
+            response = {"candidates": []}
+            self._remember_call(payload, response, model_override)
+            return response
+        if agent_name == "pack_plan":
+            response = {"writer_profile": "standard_knowledge_pack", "files": []}
+            self._remember_call(payload, response, model_override)
+            return response
+        return super().generate_json(agent_name, prompt, payload, model_override=model_override)
+
+    def generate_text(
+        self,
+        agent_name: str,
+        prompt: str,
+        payload: dict[str, Any],
+        model_override: str | None = None,
+    ) -> str:
+        if agent_name in self._writer_file_map:
+            response = f"# {payload['chapter_blueprint']['chapter_id']} {agent_name}\n"
+            self._remember_call(payload, response, model_override)
+            return response
+        return super().generate_text(agent_name, prompt, payload, model_override=model_override)
+
+    def consume_last_call_metadata(self) -> dict[str, Any] | None:
+        metadata = super().consume_last_call_metadata()
+        with self._arrival_lock:
+            self._consume_count += 1
+            if self._consume_count == 1:
+                self._first_consume_done.set()
+        return metadata
+
+    def _register_arrival(self, chapter_id: str) -> int:
+        with self._arrival_lock:
+            order = len(self._arrival_order)
+            self._arrival_order.append(chapter_id)
+            return order
+
+
 class PipelineRunnerTest(unittest.TestCase):
     def setUp(self) -> None:
         reset_provider_registry = getattr(provider_policy_module, "reset_provider_permit_registry", None)
@@ -432,6 +504,10 @@ class PipelineRunnerTest(unittest.TestCase):
 
             errors: list[Exception] = []
             thread_a = self._start_runner_thread(runner_a, errors)
+            self.assertTrue(shared_probe.entered.wait(timeout=2))
+            reset_provider_registry = getattr(provider_policy_module, "reset_provider_permit_registry", None)
+            if callable(reset_provider_registry):
+                reset_provider_registry()
             thread_b = self._start_runner_thread(runner_b, errors)
             thread_a.join(timeout=5)
             thread_b.join(timeout=5)
@@ -472,9 +548,7 @@ class PipelineRunnerTest(unittest.TestCase):
                     with self.assertRaises(RuntimeError):
                         failing_runner.run()
 
-                    active_permits = getattr(provider_policy_module, "get_provider_active_permits", None)
-                    if callable(active_permits):
-                        self.assertEqual(active_permits(provider_name), 0)
+                    self.assertEqual(failing_runner.provider_permit_registry.active_permits(provider_name), 0)
 
                     healthy_runner = self._make_runner_with_tracking_backend(
                         root=root,
@@ -520,6 +594,9 @@ class PipelineRunnerTest(unittest.TestCase):
             errors: list[Exception] = []
             thread_a = self._start_runner_thread(runner_a, errors)
             self.assertTrue(probe.entered.wait(timeout=2))
+            reset_runtime_registries = getattr(pipeline_module, "reset_pipeline_runtime_registries", None)
+            if callable(reset_runtime_registries):
+                reset_runtime_registries()
 
             second_errors: list[Exception] = []
             thread_b = self._start_runner_thread(runner_b, second_errors)
@@ -531,6 +608,68 @@ class PipelineRunnerTest(unittest.TestCase):
             self.assertEqual(errors, [])
             self.assertEqual(len(second_errors), 1)
             self.assertIsInstance(second_errors[0], RuntimeError)
+
+    def test_concurrent_llm_logging_keeps_per_call_metadata_isolated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "captions"
+            output_dir = root / "out"
+            chapters = [
+                {
+                    "chapter_id": "第一章·绪论",
+                    "title": "绪论",
+                    "aliases": ["第一章·绪论"],
+                    "expected_topics": ["数据库发展阶段"],
+                },
+                {
+                    "chapter_id": "第二章·模型",
+                    "title": "模型",
+                    "aliases": ["第二章·模型"],
+                    "expected_topics": ["关系模型"],
+                },
+            ]
+            blueprint = make_blueprint(chapters=chapters)
+            input_dir.mkdir()
+            for chapter in chapters:
+                (input_dir / f"{chapter['chapter_id']}.md").write_text(
+                    f"{chapter['title']} transcript",
+                    encoding="utf-8",
+                )
+
+            runner = PipelineRunner(
+                config=PipelineConfig(
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    course_blueprint=blueprint,
+                    backend_name="heuristic",
+                    provider_policy=ProviderExecutionPolicy(
+                        provider="heuristic",
+                        max_concurrent_per_run=2,
+                        max_concurrent_global=2,
+                        transient_http_statuses=(),
+                        max_call_attempts=1,
+                        max_resume_attempts=1,
+                    ),
+                ),
+                llm_backend=MetadataRaceHeuristicBackend(),
+            )
+
+            runner.run()
+
+            log_entries = [
+                json.loads(line)
+                for line in (output_dir / "courses" / blueprint["course_id"] / "runtime" / "llm_calls.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if line.strip()
+            ]
+            curriculum_entries = {
+                entry["scope"]: entry
+                for entry in log_entries
+                if entry["stage"] == "curriculum_anchor"
+            }
+            self.assertEqual(curriculum_entries["第一章·绪论"]["model"], "第一章·绪论")
+            self.assertEqual(curriculum_entries["第二章·模型"]["model"], "第二章·模型")
 
     def test_heuristic_run_course_completes_with_slim_writer_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
