@@ -324,7 +324,7 @@ def handle_build_blueprint(args: argparse.Namespace) -> int:
 
 
 def handle_run_course(args: argparse.Namespace) -> int:
-    resolve_provider_policy(args)
+    provider_policy = resolve_provider_policy(args)
     backend = create_backend(args)
     blueprint = _build_blueprint(args, backend)
     blueprint = apply_policy_overrides(
@@ -342,6 +342,7 @@ def handle_run_course(args: argparse.Namespace) -> int:
             stage_models=resolve_stage_models(args),
             backend_name=args.backend,
             enable_review=getattr(args, "enable_review", False),
+            provider_policy=provider_policy,
         ),
         llm_backend=backend,
     )
@@ -350,7 +351,7 @@ def handle_run_course(args: argparse.Namespace) -> int:
 
 
 def handle_resume_course(args: argparse.Namespace) -> int:
-    resolve_provider_policy(args)
+    provider_policy = resolve_provider_policy(args)
     backend = create_backend(args)
     blueprint = _load_existing_course_blueprint(args.output_dir, args.book_title)
     runtime_state = _load_existing_runtime_state(args.output_dir, args.book_title)
@@ -369,6 +370,7 @@ def handle_resume_course(args: argparse.Namespace) -> int:
             stage_models=resolve_stage_models(args),
             backend_name=args.backend,
             enable_review=bool(run_identity.get("review_enabled", False)),
+            provider_policy=provider_policy,
         ),
         llm_backend=backend,
     )
@@ -377,7 +379,7 @@ def handle_resume_course(args: argparse.Namespace) -> int:
 
 
 def handle_build_global(args: argparse.Namespace) -> int:
-    resolve_provider_policy(args)
+    provider_policy = resolve_provider_policy(args)
     backend = create_backend(args)
     blueprint = _load_existing_course_blueprint(args.output_dir, args.book_title)
     runner = PipelineRunner(
@@ -389,6 +391,7 @@ def handle_build_global(args: argparse.Namespace) -> int:
             stage_models=resolve_stage_models(args),
             backend_name=args.backend,
             run_global_consolidation=True,
+            provider_policy=provider_policy,
         ),
         llm_backend=backend,
     )

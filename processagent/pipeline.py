@@ -12,6 +12,7 @@ from typing import Any
 from .blueprint import match_chapter_for_transcript, save_blueprint
 from .bootstrap import bootstrap_course_blueprint
 from .llm import LLMBackend
+from .provider_policy import ProviderExecutionPolicy
 
 REQUIRED_PACK_FILES = (
     "01-精讲.md",
@@ -83,6 +84,7 @@ class PipelineConfig:
     backend_name: str = "heuristic"
     enable_review: bool = False
     run_global_consolidation: bool = False
+    provider_policy: ProviderExecutionPolicy | None = None
 
 
 class IngestAgent:

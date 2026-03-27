@@ -4,7 +4,9 @@ import sys
 import tempfile
 import unittest
 from argparse import Namespace
+from contextlib import ExitStack
 from pathlib import Path
+from unittest.mock import patch
 
 from processagent.blueprint import build_course_id
 import processagent.cli as cli
@@ -48,6 +50,19 @@ class _RecordingBlueprintBackend:
                 "chapter_structure": {"strategy": "llm_completed"},
             },
         }
+
+
+class _RecordingPipelineRunner:
+    instances: list["_RecordingPipelineRunner"] = []
+
+    def __init__(self, config, llm_backend) -> None:
+        self.config = config
+        self.llm_backend = llm_backend
+        self.run_called = False
+        type(self).instances.append(self)
+
+    def run(self) -> None:
+        self.run_called = True
 
 
 class CliTest(unittest.TestCase):
@@ -161,6 +176,123 @@ class CliTest(unittest.TestCase):
         self.assertEqual(policy.max_concurrent_global, 6)
         self.assertEqual(policy.max_call_attempts, 7)
         self.assertEqual(policy.max_resume_attempts, 3)
+
+    def test_runtime_handlers_preserve_provider_policy_in_pipeline_config(self) -> None:
+        parser = cli.build_parser()
+        blueprint = {
+            "course_id": build_course_id("数据库系统概论"),
+            "course_name": "数据库系统概论",
+            "source_type": "published_textbook",
+            "book": {"title": "数据库系统概论"},
+            "policy": {"review_mode": "light", "target_output": "interview_knowledge_base"},
+            "blueprint_hash": "hash",
+            "chapters": [{"chapter_id": "第一章·绪论", "title": "绪论"}],
+        }
+        runtime_state = {
+            "run_identity": {
+                "review_enabled": False,
+                "review_mode": "light",
+                "target_output": "interview_knowledge_base",
+            }
+        }
+        backend = type("Backend", (), {"model": "gpt-test"})()
+        cases = (
+            (
+                "run-course",
+                [
+                    "--book-title",
+                    "数据库系统概论",
+                    "--input-dir",
+                    ".",
+                    "--output-dir",
+                    ".",
+                    "--backend",
+                    "openai",
+                    "--max-concurrent-per-run",
+                    "2",
+                    "--max-concurrent-global",
+                    "5",
+                    "--max-call-attempts",
+                    "4",
+                    "--max-resume-attempts",
+                    "3",
+                ],
+            ),
+            (
+                "resume-course",
+                [
+                    "--book-title",
+                    "数据库系统概论",
+                    "--input-dir",
+                    ".",
+                    "--output-dir",
+                    ".",
+                    "--backend",
+                    "openai",
+                    "--max-concurrent-per-run",
+                    "2",
+                    "--max-concurrent-global",
+                    "5",
+                    "--max-call-attempts",
+                    "4",
+                    "--max-resume-attempts",
+                    "3",
+                ],
+            ),
+            (
+                "build-global",
+                [
+                    "--book-title",
+                    "数据库系统概论",
+                    "--output-dir",
+                    ".",
+                    "--backend",
+                    "openai",
+                    "--max-concurrent-per-run",
+                    "2",
+                    "--max-concurrent-global",
+                    "5",
+                    "--max-call-attempts",
+                    "4",
+                    "--max-resume-attempts",
+                    "3",
+                ],
+            ),
+        )
+
+        for command, argv in cases:
+            with self.subTest(command=command):
+                _RecordingPipelineRunner.instances = []
+                args = parser.parse_args([command, *argv])
+                with ExitStack() as stack:
+                    stack.enter_context(patch.object(cli, "create_backend", return_value=backend))
+                    stack.enter_context(patch.object(cli, "PipelineRunner", _RecordingPipelineRunner))
+                    if command == "run-course":
+                        stack.enter_context(patch.object(cli, "_build_blueprint", return_value=blueprint))
+                        stack.enter_context(
+                            patch.object(
+                                cli,
+                                "apply_policy_overrides",
+                                side_effect=lambda course_blueprint, review_mode=None, target_output=None: course_blueprint,
+                            )
+                        )
+                    else:
+                        stack.enter_context(patch.object(cli, "_load_existing_course_blueprint", return_value=blueprint))
+                    if command == "resume-course":
+                        stack.enter_context(patch.object(cli, "_load_existing_runtime_state", return_value=runtime_state))
+
+                    result = args.handler(args)
+
+                self.assertEqual(result, 0)
+                self.assertEqual(len(_RecordingPipelineRunner.instances), 1)
+                runner = _RecordingPipelineRunner.instances[0]
+                self.assertTrue(runner.run_called)
+                self.assertTrue(hasattr(runner.config, "provider_policy"))
+                self.assertEqual(runner.config.provider_policy.provider, "openai")
+                self.assertEqual(runner.config.provider_policy.max_concurrent_per_run, 2)
+                self.assertEqual(runner.config.provider_policy.max_concurrent_global, 5)
+                self.assertEqual(runner.config.provider_policy.max_call_attempts, 4)
+                self.assertEqual(runner.config.provider_policy.max_resume_attempts, 3)
 
     def test_build_blueprint_applies_blueprint_builder_model_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
