@@ -12,6 +12,7 @@ from .blueprint import apply_policy_overrides, build_course_id, load_blueprint, 
 from .bootstrap import bootstrap_course_blueprint, describe_source, load_toc_text, write_json
 from .llm import AnthropicMessagesBackend, OpenAICompatibleResponsesBackend, OpenAIResponsesBackend
 from .pipeline import HeuristicLLMBackend, PipelineConfig, PipelineRunner
+from .provider_policy import POLICY_OVERRIDE_FIELDS, resolve_provider_execution_policy
 from .testing import StubLLMBackend
 
 STAGE_MODEL_SPECS = {
@@ -90,6 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_course.add_argument("--review-mode", choices=("light", "standard", "strict"), default=None, help="Optional override for blueprint policy.review_mode.")
     run_course.add_argument("--target-output", default=None, help="Optional override for blueprint policy.target_output.")
     run_course.add_argument("--enable-review", action="store_true", help="Run the optional reviewer stage for this invocation.")
+    add_provider_policy_arguments(run_course)
     run_course.set_defaults(handler=handle_run_course)
 
     resume_course = subparsers.add_parser(
@@ -97,6 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[source_parent, backend_parent],
         help="Resume the course pipeline from valid checkpoints.",
     )
+    add_provider_policy_arguments(resume_course)
     resume_course.set_defaults(handler=handle_resume_course)
 
     build_global = subparsers.add_parser(
@@ -104,6 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[course_parent, backend_parent],
         help="Rebuild global consolidation outputs from existing approved chapter artifacts.",
     )
+    add_provider_policy_arguments(build_global)
     build_global.set_defaults(handler=handle_build_global)
 
     inspect_source = subparsers.add_parser(
@@ -128,6 +132,13 @@ def build_parser() -> argparse.ArgumentParser:
     show_status.set_defaults(handler=handle_show_status)
 
     return parser
+
+
+def add_provider_policy_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--max-concurrent-per-run", type=int, default=None, help="Optional provider policy override for run-scoped chapter concurrency.")
+    parser.add_argument("--max-concurrent-global", type=int, default=None, help="Optional provider policy override for process-wide provider concurrency.")
+    parser.add_argument("--max-call-attempts", type=int, default=None, help="Optional provider policy override for per-call retry attempts.")
+    parser.add_argument("--max-resume-attempts", type=int, default=None, help="Optional provider policy override for run-level resume attempts.")
 
 
 def load_dotenv_file(path: Path, override: bool = False) -> None:
@@ -230,6 +241,18 @@ def resolve_stage_models(args: argparse.Namespace) -> dict[str, str]:
     return resolved
 
 
+def resolve_provider_policy(
+    args: argparse.Namespace,
+    config_policy: dict[str, Any] | object | None = None,
+):
+    cli_overrides = {field_name: getattr(args, field_name, None) for field_name in POLICY_OVERRIDE_FIELDS}
+    return resolve_provider_execution_policy(
+        provider=getattr(args, "backend", "heuristic"),
+        config_policy=config_policy,
+        cli_overrides=cli_overrides,
+    )
+
+
 def create_backend(args: argparse.Namespace):
     timeout_seconds = resolve_timeout(getattr(args, "timeout_seconds", None))
     if args.backend == "openai":
@@ -301,6 +324,7 @@ def handle_build_blueprint(args: argparse.Namespace) -> int:
 
 
 def handle_run_course(args: argparse.Namespace) -> int:
+    resolve_provider_policy(args)
     backend = create_backend(args)
     blueprint = _build_blueprint(args, backend)
     blueprint = apply_policy_overrides(
@@ -326,6 +350,7 @@ def handle_run_course(args: argparse.Namespace) -> int:
 
 
 def handle_resume_course(args: argparse.Namespace) -> int:
+    resolve_provider_policy(args)
     backend = create_backend(args)
     blueprint = _load_existing_course_blueprint(args.output_dir, args.book_title)
     runtime_state = _load_existing_runtime_state(args.output_dir, args.book_title)
@@ -352,6 +377,7 @@ def handle_resume_course(args: argparse.Namespace) -> int:
 
 
 def handle_build_global(args: argparse.Namespace) -> int:
+    resolve_provider_policy(args)
     backend = create_backend(args)
     blueprint = _load_existing_course_blueprint(args.output_dir, args.book_title)
     runner = PipelineRunner(

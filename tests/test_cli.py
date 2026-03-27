@@ -7,6 +7,8 @@ from argparse import Namespace
 from pathlib import Path
 
 from processagent.blueprint import build_course_id
+import processagent.cli as cli
+
 from processagent.cli import _build_blueprint
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -49,6 +51,117 @@ class _RecordingBlueprintBackend:
 
 
 class CliTest(unittest.TestCase):
+    def test_runtime_subcommands_accept_provider_policy_flags_without_leaking_to_other_subcommands(self) -> None:
+        parser = cli.build_parser()
+        runtime_commands = (
+            (
+                "run-course",
+                [
+                    "--book-title",
+                    "数据库系统概论",
+                    "--input-dir",
+                    ".",
+                    "--output-dir",
+                    ".",
+                    "--max-concurrent-per-run",
+                    "2",
+                    "--max-concurrent-global",
+                    "5",
+                    "--max-call-attempts",
+                    "4",
+                    "--max-resume-attempts",
+                    "3",
+                ],
+            ),
+            (
+                "resume-course",
+                [
+                    "--book-title",
+                    "数据库系统概论",
+                    "--input-dir",
+                    ".",
+                    "--output-dir",
+                    ".",
+                    "--max-concurrent-per-run",
+                    "2",
+                    "--max-concurrent-global",
+                    "5",
+                    "--max-call-attempts",
+                    "4",
+                    "--max-resume-attempts",
+                    "3",
+                ],
+            ),
+            (
+                "build-global",
+                [
+                    "--book-title",
+                    "数据库系统概论",
+                    "--output-dir",
+                    ".",
+                    "--max-concurrent-per-run",
+                    "2",
+                    "--max-concurrent-global",
+                    "5",
+                    "--max-call-attempts",
+                    "4",
+                    "--max-resume-attempts",
+                    "3",
+                ],
+            ),
+        )
+
+        for command, argv in runtime_commands:
+            with self.subTest(command=command):
+                try:
+                    args = parser.parse_args([command, *argv])
+                except SystemExit as error:
+                    self.fail(f"{command} should accept provider policy flags: {error}")
+                self.assertEqual(args.max_concurrent_per_run, 2)
+                self.assertEqual(args.max_concurrent_global, 5)
+                self.assertEqual(args.max_call_attempts, 4)
+                self.assertEqual(args.max_resume_attempts, 3)
+
+        with self.assertRaises(SystemExit):
+            parser.parse_args(
+                [
+                    "build-blueprint",
+                    "--book-title",
+                    "数据库系统概论",
+                    "--input-dir",
+                    ".",
+                    "--output-dir",
+                    ".",
+                    "--max-concurrent-per-run",
+                    "2",
+                ]
+            )
+
+    def test_resolve_provider_policy_uses_cli_overrides_over_gui_defaults(self) -> None:
+        self.assertTrue(hasattr(cli, "resolve_provider_policy"), "processagent.cli.resolve_provider_policy should exist")
+
+        policy = cli.resolve_provider_policy(
+            Namespace(
+                backend="openai",
+                max_concurrent_per_run=4,
+                max_concurrent_global=None,
+                max_call_attempts=7,
+                max_resume_attempts=None,
+            ),
+            {
+                "max_concurrent_per_run": 2,
+                "max_concurrent_global": 6,
+                "max_call_attempts": 5,
+                "max_resume_attempts": 3,
+            },
+        )
+
+        self.assertEqual(policy.provider, "openai")
+        self.assertEqual(policy.max_concurrent_per_run, 4)
+        self.assertEqual(policy.max_concurrent_global, 6)
+        self.assertEqual(policy.max_call_attempts, 7)
+        self.assertEqual(policy.max_resume_attempts, 3)
+
     def test_build_blueprint_applies_blueprint_builder_model_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
