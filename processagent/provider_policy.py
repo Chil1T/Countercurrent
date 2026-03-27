@@ -106,7 +106,7 @@ class ProviderPermitRegistry:
                 slot_dir = provider_dir / f"slot-{slot_index:02d}"
                 try:
                     slot_dir.mkdir(parents=False, exist_ok=False)
-                except FileExistsError:
+                except (FileExistsError, PermissionError):
                     continue
                 self._write_owner_payload(slot_dir, owner_payload)
                 return slot_dir
