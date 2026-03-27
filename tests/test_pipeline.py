@@ -642,6 +642,71 @@ class PipelineRunnerTest(unittest.TestCase):
             self.assertFalse(lock_dir.exists())
             self.assertTrue((runner.course_dir / "runtime_state.json").exists())
 
+    def test_legacy_course_run_lock_without_pid_is_preserved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            coordination_root = root / "coordination"
+            self._use_shared_coordination_root(coordination_root)
+            output_dir = root / "out"
+            runner = self._make_runner_with_tracking_backend(
+                root=root,
+                course_name="数据库系统概论-旧格式锁",
+                output_dir=output_dir,
+                probe=ConcurrentStageProbe(),
+                provider_name="stub",
+                policy=ProviderExecutionPolicy(
+                    provider="stub",
+                    max_concurrent_per_run=1,
+                    max_concurrent_global=1,
+                    transient_http_statuses=(),
+                    max_call_attempts=1,
+                    max_resume_attempts=1,
+                ),
+            )
+            course_id = runner.course_blueprint["course_id"]
+            lock_dir = coordination_root / "course_run_locks" / course_id
+            lock_dir.mkdir(parents=True)
+            legacy_owner = {"course_id": course_id, "acquired_at": 123.0}
+            (lock_dir / "owner.json").write_text(json.dumps(legacy_owner, ensure_ascii=False), encoding="utf-8")
+
+            with self.assertRaises(RuntimeError):
+                runner.run()
+
+            self.assertTrue(lock_dir.exists())
+            self.assertEqual(json.loads((lock_dir / "owner.json").read_text(encoding="utf-8")), legacy_owner)
+
+    def test_active_course_run_lock_is_not_reclaimed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            coordination_root = root / "coordination"
+            self._use_shared_coordination_root(coordination_root)
+            output_dir = root / "out"
+            runner = self._make_runner_with_tracking_backend(
+                root=root,
+                course_name="数据库系统概论-活跃锁",
+                output_dir=output_dir,
+                probe=ConcurrentStageProbe(),
+                provider_name="stub",
+                policy=ProviderExecutionPolicy(
+                    provider="stub",
+                    max_concurrent_per_run=1,
+                    max_concurrent_global=1,
+                    transient_http_statuses=(),
+                    max_call_attempts=1,
+                    max_resume_attempts=1,
+                ),
+            )
+            course_id = runner.course_blueprint["course_id"]
+            lock_dir = coordination_root / "course_run_locks" / course_id
+            lock_dir.mkdir(parents=True)
+            owner_payload = provider_policy_module.build_coordination_owner_payload({"course_id": course_id})
+            (lock_dir / "owner.json").write_text(json.dumps(owner_payload, ensure_ascii=False), encoding="utf-8")
+
+            with self.assertRaises(RuntimeError):
+                runner.run()
+
+            self.assertTrue(lock_dir.exists())
+
     def test_concurrent_llm_logging_keeps_per_call_metadata_isolated(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

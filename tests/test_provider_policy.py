@@ -4,6 +4,7 @@ import json
 import shutil
 import tempfile
 import threading
+import types
 import unittest
 from pathlib import Path
 
@@ -191,6 +192,102 @@ class ProviderPolicyTests(unittest.TestCase):
                     worker.join(timeout=1)
 
             self.assertEqual(errors, [])
+
+    def test_provider_limit_change_does_not_interleave_with_slot_allocation(self) -> None:
+        module = self._load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root_dir = Path(tmp)
+            registry_a = module.ProviderPermitRegistry(root_dir=root_dir, poll_interval_seconds=0.01)
+            registry_b = module.ProviderPermitRegistry(root_dir=root_dir, poll_interval_seconds=0.01)
+            high_policy = module.ProviderExecutionPolicy(
+                provider="stub",
+                max_concurrent_per_run=1,
+                max_concurrent_global=2,
+                transient_http_statuses=(),
+                max_call_attempts=1,
+                max_resume_attempts=1,
+            )
+            low_policy = module.ProviderExecutionPolicy(
+                provider="stub",
+                max_concurrent_per_run=1,
+                max_concurrent_global=1,
+                transient_http_statuses=(),
+                max_call_attempts=1,
+                max_resume_attempts=1,
+            )
+            limit_ready = threading.Event()
+            allow_first = threading.Event()
+            first_entered = threading.Event()
+            second_entered = threading.Event()
+            release_first = threading.Event()
+            release_second = threading.Event()
+            errors: list[Exception] = []
+
+            original_ensure = registry_a._ensure_provider_limit
+
+            def wrapped_ensure(self, provider_dir: Path, policy: object) -> int:
+                configured_limit = original_ensure(provider_dir, policy)
+                limit_ready.set()
+                allow_first.wait(timeout=2)
+                return configured_limit
+
+            registry_a._ensure_provider_limit = types.MethodType(wrapped_ensure, registry_a)
+
+            def run_first() -> None:
+                try:
+                    with registry_a.acquire(high_policy):
+                        first_entered.set()
+                        release_first.wait(timeout=2)
+                except Exception as error:
+                    errors.append(error)
+
+            def run_second() -> None:
+                try:
+                    with registry_b.acquire(low_policy):
+                        second_entered.set()
+                        release_second.wait(timeout=2)
+                except Exception as error:
+                    errors.append(error)
+
+            first_thread = threading.Thread(target=run_first, daemon=True)
+            second_thread = threading.Thread(target=run_second, daemon=True)
+            first_thread.start()
+            self.assertTrue(limit_ready.wait(timeout=1))
+            second_thread.start()
+
+            self.assertFalse(
+                second_entered.wait(timeout=0.2),
+                "lower-limit acquisition interleaved before earlier slot allocation linearized",
+            )
+
+            allow_first.set()
+            self.assertTrue(first_entered.wait(timeout=1))
+            release_first.set()
+            first_thread.join(timeout=2)
+            self.assertFalse(first_thread.is_alive())
+            self.assertTrue(second_entered.wait(timeout=1))
+            release_second.set()
+            second_thread.join(timeout=2)
+            self.assertFalse(second_thread.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual(
+                json.loads((root_dir / "stub" / "limit.json").read_text(encoding="utf-8"))["max_concurrent_global"],
+                1,
+            )
+
+    def test_same_pid_with_different_process_start_time_is_treated_as_stale(self) -> None:
+        module = self._load_module()
+        owner_payload = {
+            "pid": 4242,
+            "process_started_at": "old-start",
+        }
+
+        self.assertFalse(
+            module._owner_refers_to_live_process(
+                owner_payload,
+                identity_reader=lambda pid: ("new-start" if pid == 4242 else None),
+            )
+        )
 
 
 if __name__ == "__main__":

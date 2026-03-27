@@ -92,7 +92,11 @@ def _acquire_course_run_slot(*, coordination_root: Path, course_id: str):
     lock_dir = coordination_root / course_id
     lock_dir.parent.mkdir(parents=True, exist_ok=True)
     owner_payload = build_coordination_owner_payload({"course_id": course_id, "kind": "course-run-lock"})
-    if not try_acquire_owned_directory(lock_dir, owner_payload=owner_payload):
+    if not try_acquire_owned_directory(
+        lock_dir,
+        owner_payload=owner_payload,
+        preserve_legacy_owner_without_pid=True,
+    ):
         raise RuntimeError(f"course {course_id} already has an active run")
     try:
         yield
