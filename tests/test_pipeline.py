@@ -1,26 +1,32 @@
 import json
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from typing import Any
 
+import processagent.pipeline as pipeline_module
+import processagent.provider_policy as provider_policy_module
 from processagent.blueprint import finalize_blueprint
 from processagent.pipeline import EXECUTION_STRATEGY, HOSTED_PRESSURE_STAGES, PIPELINE_SIGNATURE, HeuristicLLMBackend, PipelineConfig, PipelineRunner
+from processagent.provider_policy import ProviderExecutionPolicy
 from processagent.testing import StubLLMBackend
 
 
 def make_blueprint(
     *,
+    course_name: str = "数据库系统概论",
     chapters: list[dict] | None = None,
     review_mode: str = "light",
     target_output: str = "interview_knowledge_base",
 ) -> dict:
     return finalize_blueprint(
         {
-            "course_name": "数据库系统概论",
+            "course_name": course_name,
             "source_type": "published_textbook",
             "book": {
-                "title": "数据库系统概论",
+                "title": course_name,
                 "authors": ["王珊", "萨师煊"],
                 "edition": "第5版",
                 "publisher": "高等教育出版社",
@@ -169,7 +175,145 @@ class FakeChapterExecutionRuntime:
         }
 
 
+class ConcurrentStageProbe:
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self._lock = threading.Lock()
+        self.active = 0
+        self.max_active = 0
+        self.chapter_ids: list[str] = []
+
+    def enter(self, chapter_id: str) -> None:
+        with self._lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            self.chapter_ids.append(chapter_id)
+            self.entered.set()
+
+    def leave(self) -> None:
+        with self._lock:
+            self.active -= 1
+
+
+class TrackingLLMBackend:
+    def __init__(
+        self,
+        *,
+        probe: ConcurrentStageProbe | None = None,
+        tracked_stage: str = "curriculum_anchor",
+        delay_seconds: float = 0.0,
+        fail_once_stage: str | None = None,
+        provider_name: str = "stub",
+    ) -> None:
+        self.probe = probe
+        self.tracked_stage = tracked_stage
+        self.delay_seconds = delay_seconds
+        self.fail_once_stage = fail_once_stage
+        self.provider_name = provider_name
+        self._failed = False
+        self._last_call_metadata: dict[str, Any] | None = None
+
+    def generate_json(
+        self,
+        agent_name: str,
+        prompt: str,
+        payload: dict[str, Any],
+        model_override: str | None = None,
+    ) -> dict[str, Any]:
+        self._track_if_needed(agent_name, payload)
+        try:
+            if self.fail_once_stage == agent_name and not self._failed:
+                self._failed = True
+                self._remember_call(payload, None, model_override, status="error", error="forced failure")
+                raise RuntimeError(f"forced failure for {agent_name}")
+            response = self._json_response(agent_name)
+            self._remember_call(payload, response, model_override)
+            return response
+        finally:
+            self._release_if_needed(agent_name)
+
+    def generate_text(
+        self,
+        agent_name: str,
+        prompt: str,
+        payload: dict[str, Any],
+        model_override: str | None = None,
+    ) -> str:
+        self._track_if_needed(agent_name, payload)
+        try:
+            if self.fail_once_stage == agent_name and not self._failed:
+                self._failed = True
+                self._remember_call(payload, None, model_override, status="error", error="forced failure")
+                raise RuntimeError(f"forced failure for {agent_name}")
+            response = f"# {agent_name}\n"
+            self._remember_call(payload, response, model_override)
+            return response
+        finally:
+            self._release_if_needed(agent_name)
+
+    def consume_last_call_metadata(self) -> dict[str, Any] | None:
+        metadata = self._last_call_metadata
+        self._last_call_metadata = None
+        return metadata
+
+    def _track_if_needed(self, agent_name: str, payload: dict[str, Any]) -> None:
+        if self.probe is None or agent_name != self.tracked_stage:
+            return
+        chapter_id = payload.get("chapter_blueprint", {}).get("chapter_id", "global")
+        self.probe.enter(chapter_id)
+        if self.delay_seconds > 0:
+            time.sleep(self.delay_seconds)
+
+    def _release_if_needed(self, agent_name: str) -> None:
+        if self.probe is None or agent_name != self.tracked_stage:
+            return
+        self.probe.leave()
+
+    def _remember_call(
+        self,
+        payload: dict[str, Any],
+        response: dict[str, Any] | str | None,
+        model_override: str | None,
+        *,
+        status: str = "completed",
+        error: str | None = None,
+    ) -> None:
+        output_value = "" if response is None else response
+        self._last_call_metadata = {
+            "provider": self.provider_name,
+            "model": model_override,
+            "input_tokens": self._estimate_tokens(payload),
+            "output_tokens": self._estimate_tokens(output_value),
+            "duration_ms": 0,
+            "status": status,
+            "error": error,
+        }
+
+    def _estimate_tokens(self, value: dict[str, Any] | str) -> int:
+        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        return max(1, len(text.encode("utf-8")) // 4)
+
+    def _json_response(self, agent_name: str) -> dict[str, Any]:
+        if agent_name == "curriculum_anchor":
+            return {"chapter_summary": "锚点", "anchors": []}
+        if agent_name == "gap_fill":
+            return {"candidates": []}
+        if agent_name == "pack_plan":
+            return {"writer_profile": "standard_knowledge_pack", "files": []}
+        if agent_name == "review":
+            return {"status": "approved", "issues": []}
+        raise KeyError(f"Unsupported JSON agent: {agent_name}")
+
+
 class PipelineRunnerTest(unittest.TestCase):
+    def setUp(self) -> None:
+        reset_provider_registry = getattr(provider_policy_module, "reset_provider_permit_registry", None)
+        if callable(reset_provider_registry):
+            reset_provider_registry()
+        reset_runtime_registries = getattr(pipeline_module, "reset_pipeline_runtime_registries", None)
+        if callable(reset_runtime_registries):
+            reset_runtime_registries()
+
     def test_pipeline_declares_current_hosted_pressure_points_and_serial_execution(self) -> None:
         self.assertEqual(
             HOSTED_PRESSURE_STAGES,
@@ -190,11 +334,203 @@ class PipelineRunnerTest(unittest.TestCase):
         self.assertEqual(
             EXECUTION_STRATEGY,
             {
-                "chapter_loop": "serial",
+                "chapter_loop": "policy_limited_parallel",
                 "writer_loop": "serial",
                 "global_consolidation": "serial",
             },
         )
+
+    def test_run_allows_multiple_chapters_concurrently_but_caps_per_run_parallelism(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "captions"
+            output_dir = root / "out"
+            chapters = [
+                {
+                    "chapter_id": "第一章·绪论",
+                    "title": "绪论",
+                    "aliases": ["第一章·绪论"],
+                    "expected_topics": ["数据库发展阶段"],
+                },
+                {
+                    "chapter_id": "第二章·模型",
+                    "title": "模型",
+                    "aliases": ["第二章·模型"],
+                    "expected_topics": ["关系模型"],
+                },
+                {
+                    "chapter_id": "第三章·语言",
+                    "title": "语言",
+                    "aliases": ["第三章·语言"],
+                    "expected_topics": ["SQL"],
+                },
+            ]
+            blueprint = make_blueprint(chapters=chapters)
+            input_dir.mkdir()
+            for chapter in chapters:
+                (input_dir / f"{chapter['chapter_id']}.md").write_text(
+                    f"{chapter['title']} transcript",
+                    encoding="utf-8",
+                )
+
+            probe = ConcurrentStageProbe()
+            backend = TrackingLLMBackend(probe=probe, delay_seconds=0.15)
+            policy = ProviderExecutionPolicy(
+                provider="stub",
+                max_concurrent_per_run=2,
+                max_concurrent_global=8,
+                transient_http_statuses=(),
+                max_call_attempts=1,
+                max_resume_attempts=1,
+            )
+            runner = PipelineRunner(
+                config=PipelineConfig(
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    course_blueprint=blueprint,
+                    backend_name="stub",
+                    provider_policy=policy,
+                ),
+                llm_backend=backend,
+            )
+
+            runner.run()
+
+            self.assertGreaterEqual(len(set(probe.chapter_ids)), 3)
+            self.assertEqual(probe.max_active, 2)
+
+    def test_provider_global_permit_caps_total_hosted_calls_across_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            shared_probe = ConcurrentStageProbe()
+            policy = ProviderExecutionPolicy(
+                provider="stub",
+                max_concurrent_per_run=2,
+                max_concurrent_global=1,
+                transient_http_statuses=(),
+                max_call_attempts=1,
+                max_resume_attempts=1,
+            )
+
+            runner_a = self._make_runner_with_tracking_backend(
+                root=root,
+                course_name="数据库系统概论-A",
+                output_dir=output_dir,
+                probe=shared_probe,
+                provider_name="stub",
+                policy=policy,
+            )
+            runner_b = self._make_runner_with_tracking_backend(
+                root=root,
+                course_name="数据库系统概论-B",
+                output_dir=output_dir,
+                probe=shared_probe,
+                provider_name="stub",
+                policy=policy,
+            )
+
+            errors: list[Exception] = []
+            thread_a = self._start_runner_thread(runner_a, errors)
+            thread_b = self._start_runner_thread(runner_b, errors)
+            thread_a.join(timeout=5)
+            thread_b.join(timeout=5)
+
+            self.assertFalse(thread_a.is_alive())
+            self.assertFalse(thread_b.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual(shared_probe.max_active, 1)
+
+    def test_failed_hosted_stage_releases_provider_permit_for_stub_and_heuristic(self) -> None:
+        for provider_name in ("stub", "heuristic"):
+            reset_provider_registry = getattr(provider_policy_module, "reset_provider_permit_registry", None)
+            if callable(reset_provider_registry):
+                reset_provider_registry()
+
+            with self.subTest(provider_name=provider_name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    output_dir = root / "out"
+                    policy = ProviderExecutionPolicy(
+                        provider=provider_name,
+                        max_concurrent_per_run=1,
+                        max_concurrent_global=1,
+                        transient_http_statuses=(),
+                        max_call_attempts=1,
+                        max_resume_attempts=1,
+                    )
+
+                    failing_runner = self._make_runner_with_tracking_backend(
+                        root=root,
+                        course_name=f"{provider_name}-failing",
+                        output_dir=output_dir,
+                        probe=ConcurrentStageProbe(),
+                        provider_name=provider_name,
+                        policy=policy,
+                        fail_once_stage="curriculum_anchor",
+                    )
+                    with self.assertRaises(RuntimeError):
+                        failing_runner.run()
+
+                    active_permits = getattr(provider_policy_module, "get_provider_active_permits", None)
+                    if callable(active_permits):
+                        self.assertEqual(active_permits(provider_name), 0)
+
+                    healthy_runner = self._make_runner_with_tracking_backend(
+                        root=root,
+                        course_name=f"{provider_name}-healthy",
+                        output_dir=output_dir,
+                        probe=ConcurrentStageProbe(),
+                        provider_name=provider_name,
+                        policy=policy,
+                    )
+                    healthy_runner.run()
+
+    def test_same_course_id_rejects_multiple_active_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "out"
+            probe = ConcurrentStageProbe()
+            policy = ProviderExecutionPolicy(
+                provider="stub",
+                max_concurrent_per_run=1,
+                max_concurrent_global=2,
+                transient_http_statuses=(),
+                max_call_attempts=1,
+                max_resume_attempts=1,
+            )
+            runner_a = self._make_runner_with_tracking_backend(
+                root=root,
+                course_name="数据库系统概论-冲突课程",
+                output_dir=output_dir,
+                probe=probe,
+                provider_name="stub",
+                policy=policy,
+                delay_seconds=0.2,
+            )
+            runner_b = self._make_runner_with_tracking_backend(
+                root=root,
+                course_name="数据库系统概论-冲突课程",
+                output_dir=output_dir,
+                probe=ConcurrentStageProbe(),
+                provider_name="stub",
+                policy=policy,
+            )
+
+            errors: list[Exception] = []
+            thread_a = self._start_runner_thread(runner_a, errors)
+            self.assertTrue(probe.entered.wait(timeout=2))
+
+            second_errors: list[Exception] = []
+            thread_b = self._start_runner_thread(runner_b, second_errors)
+            thread_b.join(timeout=3)
+            thread_a.join(timeout=5)
+
+            self.assertFalse(thread_a.is_alive())
+            self.assertFalse(thread_b.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual(len(second_errors), 1)
+            self.assertIsInstance(second_errors[0], RuntimeError)
 
     def test_heuristic_run_course_completes_with_slim_writer_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -486,6 +822,68 @@ class PipelineRunnerTest(unittest.TestCase):
 
             self.assertTrue((course_dir / "global" / "global_glossary.md").exists())
             self.assertTrue((course_dir / "global" / "interview_index.md").exists())
+
+    def _make_runner_with_tracking_backend(
+        self,
+        *,
+        root: Path,
+        course_name: str,
+        output_dir: Path,
+        probe: ConcurrentStageProbe,
+        provider_name: str,
+        policy: ProviderExecutionPolicy,
+        delay_seconds: float = 0.15,
+        fail_once_stage: str | None = None,
+    ) -> PipelineRunner:
+        input_dir = root / course_name / "captions"
+        chapters = [
+            {
+                "chapter_id": "第一章·绪论",
+                "title": "绪论",
+                "aliases": ["第一章·绪论"],
+                "expected_topics": ["数据库发展阶段"],
+            },
+            {
+                "chapter_id": "第二章·模型",
+                "title": "模型",
+                "aliases": ["第二章·模型"],
+                "expected_topics": ["关系模型"],
+            },
+        ]
+        blueprint = make_blueprint(course_name=course_name, chapters=chapters)
+        input_dir.mkdir(parents=True, exist_ok=True)
+        for chapter in chapters:
+            (input_dir / f"{chapter['chapter_id']}.md").write_text(
+                f"{chapter['title']} transcript",
+                encoding="utf-8",
+            )
+        backend = TrackingLLMBackend(
+            probe=probe,
+            delay_seconds=delay_seconds,
+            fail_once_stage=fail_once_stage,
+            provider_name=provider_name,
+        )
+        return PipelineRunner(
+            config=PipelineConfig(
+                input_dir=input_dir,
+                output_dir=output_dir,
+                course_blueprint=blueprint,
+                backend_name=provider_name,
+                provider_policy=policy,
+            ),
+            llm_backend=backend,
+        )
+
+    def _start_runner_thread(self, runner: PipelineRunner, errors: list[Exception]) -> threading.Thread:
+        def target() -> None:
+            try:
+                runner.run()
+            except Exception as error:  # pragma: no cover - test helper
+                errors.append(error)
+
+        thread = threading.Thread(target=target)
+        thread.start()
+        return thread
 
     def _chapter_dir(self, output_dir: Path, blueprint: dict) -> Path:
         return output_dir / "courses" / blueprint["course_id"] / "chapters" / "第一章·绪论"

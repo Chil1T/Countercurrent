@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
@@ -408,6 +409,35 @@ class ChapterWorker:
             if writer_name in step_results
         }
         return {"files": files}
+
+
+class ChapterExecutionScheduler:
+    def __init__(self, *, worker: ChapterWorker, max_concurrent_chapters: int) -> None:
+        self.worker = worker
+        self.max_concurrent_chapters = max(1, max_concurrent_chapters)
+
+    def run(self, plans: tuple[ChapterExecutionPlan, ...]) -> None:
+        if not plans:
+            return
+        if self.max_concurrent_chapters == 1 or len(plans) == 1:
+            for plan in plans:
+                self.worker.run(plan)
+            return
+
+        executor = ThreadPoolExecutor(max_workers=self.max_concurrent_chapters)
+        futures = [executor.submit(self.worker.run, plan) for plan in plans]
+        try:
+            done, pending = wait(futures, return_when=FIRST_EXCEPTION)
+            for future in done:
+                error = future.exception()
+                if error is not None:
+                    for pending_future in pending:
+                        pending_future.cancel()
+                    raise error
+            for future in pending:
+                future.result()
+        finally:
+            executor.shutdown(wait=True, cancel_futures=True)
 
 
 def build_chapter_stage_definitions(

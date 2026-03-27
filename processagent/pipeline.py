@@ -4,16 +4,18 @@ import json
 import re
 import shutil
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from threading import Lock
+from typing import Any, Callable, TypeVar
 
 from .blueprint import match_chapter_for_transcript, save_blueprint
 from .bootstrap import bootstrap_course_blueprint
-from .chapter_execution import ChapterExecutionPlanner, ChapterWorker, RuntimeStateMutationGuard
+from .chapter_execution import ChapterExecutionPlanner, ChapterExecutionScheduler, ChapterWorker, RuntimeStateMutationGuard
 from .llm import LLMBackend
-from .provider_policy import ProviderExecutionPolicy
+from .provider_policy import ProviderExecutionPolicy, acquire_provider_permit, get_builtin_provider_policy, reset_provider_permit_registry
 
 REQUIRED_PACK_FILES = (
     "01-精讲.md",
@@ -68,10 +70,33 @@ HOSTED_PRESSURE_STAGES = (
     "build_interview_index",
 )
 EXECUTION_STRATEGY = {
-    "chapter_loop": "serial",
+    "chapter_loop": "policy_limited_parallel",
     "writer_loop": "serial",
     "global_consolidation": "serial",
 }
+
+_ACTIVE_COURSE_RUNS_LOCK = Lock()
+_ACTIVE_COURSE_RUNS: set[str] = set()
+T = TypeVar("T")
+
+
+@contextmanager
+def _acquire_course_run_slot(course_id: str):
+    with _ACTIVE_COURSE_RUNS_LOCK:
+        if course_id in _ACTIVE_COURSE_RUNS:
+            raise RuntimeError(f"course {course_id} already has an active run")
+        _ACTIVE_COURSE_RUNS.add(course_id)
+    try:
+        yield
+    finally:
+        with _ACTIVE_COURSE_RUNS_LOCK:
+            _ACTIVE_COURSE_RUNS.discard(course_id)
+
+
+def reset_pipeline_runtime_registries() -> None:
+    with _ACTIVE_COURSE_RUNS_LOCK:
+        _ACTIVE_COURSE_RUNS.clear()
+    reset_provider_permit_registry()
 
 
 @dataclass
@@ -239,6 +264,7 @@ class PipelineRunner:
         self.prompt_dir = Path(__file__).with_name("prompts")
         self.ingest_agent = IngestAgent()
         self.pack_writer_files = PACK_WRITER_FILES
+        self.provider_policy = self.config.provider_policy or get_builtin_provider_policy(self.config.backend_name)
         self.course_blueprint = self.config.course_blueprint or bootstrap_course_blueprint(
             input_dir=self.config.input_dir,
             book_title=self.config.input_dir.name or "未命名课程",
@@ -266,31 +292,39 @@ class PipelineRunner:
             runtime=self.chapter_execution_runtime,
             runtime_state_guard=self.runtime_state_guard,
         )
+        self.chapter_scheduler = ChapterExecutionScheduler(
+            worker=self.chapter_worker,
+            max_concurrent_chapters=self.provider_policy.max_concurrent_per_run,
+        )
 
     def run(self) -> None:
-        if self.config.clean_output and self.course_dir.exists():
-            shutil.rmtree(self.course_dir)
-            self.runtime_state.clear()
-            self.runtime_state.update(self._fresh_runtime_state())
+        with _acquire_course_run_slot(self.course_blueprint["course_id"]):
+            if self.config.clean_output and self.course_dir.exists():
+                shutil.rmtree(self.course_dir)
+                self.runtime_state.clear()
+                self.runtime_state.update(self._fresh_runtime_state())
 
-        self.course_dir.mkdir(parents=True, exist_ok=True)
-        save_blueprint(self.blueprint_path, self.course_blueprint)
-        self._persist_runtime_state()
-
-        if self.config.run_global_consolidation:
-            self._run_global_consolidation()
+            self.course_dir.mkdir(parents=True, exist_ok=True)
+            save_blueprint(self.blueprint_path, self.course_blueprint)
             self._persist_runtime_state()
-            return
 
-        for transcript_file in sorted(self.config.input_dir.glob("*.md")):
-            chapter_blueprint = match_chapter_for_transcript(self.course_blueprint, transcript_file.stem)
-            plan = self.chapter_planner.plan(
-                transcript_file=transcript_file,
-                chapter_blueprint=chapter_blueprint,
-            )
-            self.chapter_worker.run(plan)
+            if self.config.run_global_consolidation:
+                self._run_global_consolidation()
+                self._persist_runtime_state()
+                return
 
-        self._persist_runtime_state()
+            plans: list[Any] = []
+            for transcript_file in sorted(self.config.input_dir.glob("*.md")):
+                chapter_blueprint = match_chapter_for_transcript(self.course_blueprint, transcript_file.stem)
+                plans.append(
+                    self.chapter_planner.plan(
+                        transcript_file=transcript_file,
+                        chapter_blueprint=chapter_blueprint,
+                    )
+                )
+            self.chapter_scheduler.run(tuple(plans))
+
+            self._persist_runtime_state()
 
     def _run_global_consolidation(self) -> None:
         active_chapters = self._collect_active_chapters()
@@ -382,11 +416,14 @@ class PipelineRunner:
         response: dict[str, Any] | None = None
         error: Exception | None = None
         try:
-            response = self.llm_backend.generate_json(
-                agent_name=agent_name,
-                prompt=prompt,
-                payload=payload,
-                model_override=model_override,
+            response = self._run_hosted_stage(
+                agent_name,
+                lambda: self.llm_backend.generate_json(
+                    agent_name=agent_name,
+                    prompt=prompt,
+                    payload=payload,
+                    model_override=model_override,
+                ),
             )
             return response
         except Exception as exc:
@@ -412,11 +449,14 @@ class PipelineRunner:
         error: Exception | None = None
         started_at = time.perf_counter()
         try:
-            response = self.llm_backend.generate_text(
-                agent_name=agent_name,
-                prompt=prompt,
-                payload=payload,
-                model_override=model_override,
+            response = self._run_hosted_stage(
+                agent_name,
+                lambda: self.llm_backend.generate_text(
+                    agent_name=agent_name,
+                    prompt=prompt,
+                    payload=payload,
+                    model_override=model_override,
+                ),
             )
             return response
         except Exception as exc:
@@ -755,6 +795,12 @@ class PipelineRunner:
     def _active_writer_names(self) -> tuple[str, ...]:
         profile = self._resolve_writer_profile()
         return WRITER_STAGE_SETS.get(profile, WRITER_STAGE_SETS["standard_knowledge_pack"])
+
+    def _run_hosted_stage(self, agent_name: str, operation: Callable[[], T]) -> T:
+        if agent_name not in HOSTED_PRESSURE_STAGES:
+            return operation()
+        with acquire_provider_permit(self.provider_policy):
+            return operation()
 
 
 class HeuristicLLMBackend:

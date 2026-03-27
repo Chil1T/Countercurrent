@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from argparse import Namespace
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from threading import BoundedSemaphore, Lock
 from typing import Any, Mapping
 
 DEFAULT_TRANSIENT_HTTP_STATUSES = (408, 425, 429, 500, 502, 503, 504)
@@ -65,6 +67,75 @@ BUILTIN_PROVIDER_EXECUTION_POLICIES: dict[str, ProviderExecutionPolicy] = {
         max_resume_attempts=1,
     ),
 }
+
+
+@dataclass
+class _ProviderPermitState:
+    limit: int
+    semaphore: BoundedSemaphore
+    active_permits: int = 0
+
+
+class ProviderPermitRegistry:
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._states: dict[str, _ProviderPermitState] = {}
+
+    @contextmanager
+    def acquire(self, policy: ProviderExecutionPolicy):
+        state = self._get_or_create_state(policy)
+        state.semaphore.acquire()
+        with self._lock:
+            state.active_permits += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                state.active_permits -= 1
+            state.semaphore.release()
+
+    def active_permits(self, provider: str) -> int:
+        with self._lock:
+            state = self._states.get(provider)
+            if state is None:
+                return 0
+            return state.active_permits
+
+    def reset(self) -> None:
+        with self._lock:
+            self._states.clear()
+
+    def _get_or_create_state(self, policy: ProviderExecutionPolicy) -> _ProviderPermitState:
+        with self._lock:
+            state = self._states.get(policy.provider)
+            if state is None or (state.limit != policy.max_concurrent_global and state.active_permits == 0):
+                state = _ProviderPermitState(
+                    limit=policy.max_concurrent_global,
+                    semaphore=BoundedSemaphore(policy.max_concurrent_global),
+                )
+                self._states[policy.provider] = state
+                return state
+            if state.limit != policy.max_concurrent_global:
+                raise RuntimeError(
+                    "provider global concurrency limit cannot change while permits are active: "
+                    f"{policy.provider} {state.limit} -> {policy.max_concurrent_global}"
+                )
+            return state
+
+
+_GLOBAL_PROVIDER_PERMIT_REGISTRY = ProviderPermitRegistry()
+
+
+def acquire_provider_permit(policy: ProviderExecutionPolicy):
+    return _GLOBAL_PROVIDER_PERMIT_REGISTRY.acquire(policy)
+
+
+def get_provider_active_permits(provider: str) -> int:
+    return _GLOBAL_PROVIDER_PERMIT_REGISTRY.active_permits(provider)
+
+
+def reset_provider_permit_registry() -> None:
+    _GLOBAL_PROVIDER_PERMIT_REGISTRY.reset()
 
 
 def get_builtin_provider_policy(provider: str) -> ProviderExecutionPolicy:
