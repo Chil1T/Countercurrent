@@ -117,12 +117,14 @@ class RetryingLLMBackendTest(unittest.TestCase):
         self.assertEqual(sleep_calls, [0.25, 0.5])
 
     def test_transient_network_error_retries(self) -> None:
-        from processagent.llm import LLMNetworkError
+        from processagent.llm import _coerce_network_error
         from processagent.retrying_llm import RetryingLLMBackend
 
+        timeout_error = OSError(0, "winsock timeout")
+        timeout_error.winerror = 10060
         backend = ScriptedLLMBackend(
             [
-                LLMNetworkError(kind="timeout", message="timed out"),
+                _coerce_network_error(timeout_error),
                 {"status": "ok"},
             ]
         )

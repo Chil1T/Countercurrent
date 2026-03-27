@@ -294,10 +294,9 @@ def _coerce_network_error(error: BaseException) -> LLMNetworkError:
     if isinstance(error, socket.timeout):
         return LLMNetworkError(kind="timeout", message=str(error))
     if isinstance(error, OSError):
-        if getattr(error, "errno", None) == 104:
-            return LLMNetworkError(kind="connection_reset", message=str(error))
-        if getattr(error, "errno", None) in (110, 111):
-            return LLMNetworkError(kind="connection_error", message=str(error))
+        kind = _network_os_error_kind(error)
+        if kind is not None:
+            return LLMNetworkError(kind=kind, message=str(error))
     return LLMNetworkError(kind="urlopen", message=str(error))
 
 
@@ -306,7 +305,17 @@ def _is_transient_network_os_error(error: OSError) -> bool:
         return True
     if isinstance(error, ConnectionResetError):
         return True
-    return getattr(error, "errno", None) in (104, 110, 111)
+    return _network_os_error_kind(error) is not None
+
+
+def _network_os_error_kind(error: OSError) -> str | None:
+    if getattr(error, "errno", None) == 104 or getattr(error, "winerror", None) == 10054:
+        return "connection_reset"
+    if getattr(error, "errno", None) == 110 or getattr(error, "winerror", None) == 10060:
+        return "timeout"
+    if getattr(error, "errno", None) == 111 or getattr(error, "winerror", None) == 10061:
+        return "connection_error"
+    return None
 
 
 @dataclass

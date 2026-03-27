@@ -5,7 +5,15 @@ import threading
 import unittest
 
 from processagent.cli import create_backend, resolve_stage_models
-from processagent.llm import AnthropicMessagesBackend, OpenAICompatibleResponsesBackend, OpenAIResponsesBackend, parse_json_text
+from processagent.llm import (
+    AnthropicMessagesBackend,
+    LLMNetworkError,
+    OpenAICompatibleResponsesBackend,
+    OpenAIResponsesBackend,
+    _coerce_network_error,
+    _is_transient_network_os_error,
+    parse_json_text,
+)
 
 
 class ConcurrentMetadataOpenAIBackend(OpenAIResponsesBackend):
@@ -329,6 +337,36 @@ class OpenAIResponsesBackendMetadataTest(unittest.TestCase):
         self.assertEqual(results["first"]["input_tokens"], 101)
         self.assertEqual(results["second"]["model"], "model-b")
         self.assertEqual(results["second"]["input_tokens"], 202)
+
+
+class NetworkErrorMappingTest(unittest.TestCase):
+    @staticmethod
+    def _windows_os_error(*, winerror: int, errno: int | None = None, message: str) -> OSError:
+        error = OSError(0 if errno is None else errno, message)
+        error.winerror = winerror
+        return error
+
+    def test_coerce_network_error_maps_windows_winsock_transient_codes(self) -> None:
+        scenarios = [
+            (10054, "connection_reset"),
+            (10060, "timeout"),
+            (10061, "connection_error"),
+        ]
+
+        for winerror, expected_kind in scenarios:
+            with self.subTest(winerror=winerror):
+                error = self._windows_os_error(winerror=winerror, message=f"winsock {winerror}")
+
+                mapped = _coerce_network_error(error)
+
+                self.assertIsInstance(mapped, LLMNetworkError)
+                self.assertEqual(mapped.kind, expected_kind)
+
+    def test_is_transient_network_os_error_accepts_windows_winsock_transient_codes(self) -> None:
+        for winerror in (10054, 10060, 10061):
+            with self.subTest(winerror=winerror):
+                error = self._windows_os_error(winerror=winerror, message=f"winsock {winerror}")
+                self.assertTrue(_is_transient_network_os_error(error))
 
 
 class JsonParsingTest(unittest.TestCase):
