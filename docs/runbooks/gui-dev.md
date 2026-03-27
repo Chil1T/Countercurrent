@@ -441,7 +441,7 @@ out/_gui/frontend-dev.log
   - `retry_history`：按尝试顺序记录每次 error/completed 与 `will_retry`
   - `last_error_kind`：最近一次失败尝试的错误类型；即使最终一次已成功，也可能保留最后一次 transient error 的种类
 - 结果页已接通 artifacts tree、文件预览、review 摘要和 ZIP 导出。
-- 结果页导出当前支持两类过滤参数：
+- artifacts API / 前端 URL builder 当前支持两类导出过滤参数，但 GUI 结果页还没有暴露对应筛选控件：
   - `completed_chapters_only=true`：只导出严格口径 `export_ready` 的章节作用域文件；课程根文件与非章节文件仍保留
   - `final_outputs_only=true`：只导出 `chapters/<chapter_id>/notebooklm/*`
 - 两个过滤参数同时存在时，结果是“严格 completed chapter”与“最终产物目录”的交集。
