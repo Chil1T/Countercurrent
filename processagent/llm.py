@@ -7,6 +7,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from threading import local
 from typing import Any, Protocol
 
 
@@ -60,7 +61,7 @@ def parse_json_text(text: str) -> dict[str, Any]:
 @dataclass
 class HttpJsonBackend:
     timeout_seconds: int = 120
-    _last_call_metadata: dict[str, Any] | None = field(default=None, init=False, repr=False)
+    _call_metadata: Any = field(default_factory=local, init=False, repr=False)
 
     def _post_json(self, url: str, body: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
         request = urllib.request.Request(
@@ -77,8 +78,8 @@ class HttpJsonBackend:
             raise RuntimeError(f"LLM request failed: {error.code} {detail}") from error
 
     def consume_last_call_metadata(self) -> dict[str, Any] | None:
-        metadata = self._last_call_metadata
-        self._last_call_metadata = None
+        metadata = getattr(self._call_metadata, "value", None)
+        self._call_metadata.value = None
         return metadata
 
     def _usage_from_response(self, response_json: dict[str, Any]) -> tuple[int | None, int | None]:
@@ -104,7 +105,7 @@ class HttpJsonBackend:
         input_tokens, output_tokens = (None, None)
         if response_json is not None:
             input_tokens, output_tokens = self._usage_from_response(response_json)
-        self._last_call_metadata = {
+        self._call_metadata.value = {
             "provider": provider,
             "model": model,
             "input_tokens": input_tokens,
