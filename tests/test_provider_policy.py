@@ -99,6 +99,24 @@ class ProviderPolicyTests(unittest.TestCase):
         self.assertEqual(resolved.max_call_attempts, 8)
         self.assertEqual(resolved.max_resume_attempts, 6)
 
+    def test_provider_policy_resolver_rejects_non_strict_integer_values(self) -> None:
+        module = self._load_module()
+
+        for invalid_value in (True, "2"):
+            with self.subTest(source="config", invalid_value=invalid_value):
+                with self.assertRaises(ValueError):
+                    module.resolve_provider_execution_policy(
+                        provider="openai",
+                        config_policy={"max_call_attempts": invalid_value},
+                    )
+
+            with self.subTest(source="cli", invalid_value=invalid_value):
+                with self.assertRaises(ValueError):
+                    module.resolve_provider_execution_policy(
+                        provider="openai",
+                        cli_overrides={"max_call_attempts": invalid_value},
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()

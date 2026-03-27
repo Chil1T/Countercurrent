@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from typing import Annotated
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 ProviderName = Literal["heuristic", "openai", "openai_compatible", "anthropic"]
+PositiveStrictInt = Annotated[StrictInt, Field(gt=0)]
 
 
 class HostedProviderSettings(BaseModel):
@@ -22,10 +24,10 @@ class GuiRuntimeProviders(BaseModel):
 
 
 class ProviderPolicySettings(BaseModel):
-    max_concurrent_per_run: int | None = Field(default=None, gt=0)
-    max_concurrent_global: int | None = Field(default=None, gt=0)
-    max_call_attempts: int | None = Field(default=None, gt=0)
-    max_resume_attempts: int | None = Field(default=None, gt=0)
+    max_concurrent_per_run: PositiveStrictInt | None = None
+    max_concurrent_global: PositiveStrictInt | None = None
+    max_call_attempts: PositiveStrictInt | None = None
+    max_resume_attempts: PositiveStrictInt | None = None
 
 
 class GuiRuntimeProviderPolicies(BaseModel):

@@ -127,7 +127,7 @@ def _coerce_override_mapping(overrides: Mapping[str, Any] | Namespace | object |
 
 
 def _validate_positive_int(field_name: str, value: Any) -> int:
-    if not isinstance(value, int):
+    if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"{field_name} must be an integer")
     if value <= 0:
         raise ValueError(f"{field_name} must be greater than 0")
