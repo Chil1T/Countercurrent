@@ -5,7 +5,6 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 ProviderName = Literal["heuristic", "openai", "openai_compatible", "anthropic"]
-ProviderPolicyName = Literal["heuristic", "openai", "openai_compatible", "anthropic", "stub"]
 
 
 class HostedProviderSettings(BaseModel):
@@ -23,10 +22,10 @@ class GuiRuntimeProviders(BaseModel):
 
 
 class ProviderPolicySettings(BaseModel):
-    max_concurrent_per_run: int | None = None
-    max_concurrent_global: int | None = None
-    max_call_attempts: int | None = None
-    max_resume_attempts: int | None = None
+    max_concurrent_per_run: int | None = Field(default=None, gt=0)
+    max_concurrent_global: int | None = Field(default=None, gt=0)
+    max_call_attempts: int | None = Field(default=None, gt=0)
+    max_resume_attempts: int | None = Field(default=None, gt=0)
 
 
 class GuiRuntimeProviderPolicies(BaseModel):

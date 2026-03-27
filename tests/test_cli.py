@@ -294,6 +294,31 @@ class CliTest(unittest.TestCase):
                 self.assertEqual(runner.config.provider_policy.max_call_attempts, 4)
                 self.assertEqual(runner.config.provider_policy.max_resume_attempts, 3)
 
+    def test_runtime_subcommands_reject_invalid_provider_policy_values_with_argument_error(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "processagent.cli",
+                "run-course",
+                "--book-title",
+                "数据库系统概论",
+                "--input-dir",
+                ".",
+                "--output-dir",
+                ".",
+                "--max-concurrent-per-run",
+                "0",
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("max-concurrent-per-run", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
     def test_build_blueprint_applies_blueprint_builder_model_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -83,6 +83,7 @@ class LocalProcessRunner:
                 command.extend(["--gap-fill-model", spec.complex_model])
                 command.extend(["--compose-pack-model", spec.complex_model])
                 command.extend(["--review-model", spec.complex_model])
+        if spec.command in {"run-course", "resume-course"}:
             self._append_provider_policy_args(command, spec)
         if spec.command == "run-course" and spec.review_mode:
             command.extend(["--review-mode", spec.review_mode])

@@ -134,11 +134,18 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def positive_int_arg(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be greater than 0")
+    return parsed
+
+
 def add_provider_policy_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--max-concurrent-per-run", type=int, default=None, help="Optional provider policy override for run-scoped chapter concurrency.")
-    parser.add_argument("--max-concurrent-global", type=int, default=None, help="Optional provider policy override for process-wide provider concurrency.")
-    parser.add_argument("--max-call-attempts", type=int, default=None, help="Optional provider policy override for per-call retry attempts.")
-    parser.add_argument("--max-resume-attempts", type=int, default=None, help="Optional provider policy override for run-level resume attempts.")
+    parser.add_argument("--max-concurrent-per-run", type=positive_int_arg, default=None, help="Optional provider policy override for run-scoped chapter concurrency.")
+    parser.add_argument("--max-concurrent-global", type=positive_int_arg, default=None, help="Optional provider policy override for process-wide provider concurrency.")
+    parser.add_argument("--max-call-attempts", type=positive_int_arg, default=None, help="Optional provider policy override for per-call retry attempts.")
+    parser.add_argument("--max-resume-attempts", type=positive_int_arg, default=None, help="Optional provider policy override for run-level resume attempts.")
 
 
 def load_dotenv_file(path: Path, override: bool = False) -> None:
