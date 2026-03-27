@@ -25,6 +25,10 @@ class CourseRunSpec:
     review_enabled: bool = False
     review_mode: str | None = None
     target_output: str | None = None
+    max_concurrent_per_run: int | None = None
+    max_concurrent_global: int | None = None
+    max_call_attempts: int | None = None
+    max_resume_attempts: int | None = None
 
 
 @dataclass(frozen=True)
@@ -79,6 +83,7 @@ class LocalProcessRunner:
                 command.extend(["--gap-fill-model", spec.complex_model])
                 command.extend(["--compose-pack-model", spec.complex_model])
                 command.extend(["--review-model", spec.complex_model])
+            self._append_provider_policy_args(command, spec)
         if spec.command == "run-course" and spec.review_mode:
             command.extend(["--review-mode", spec.review_mode])
         if spec.command == "run-course" and spec.review_enabled:
@@ -96,6 +101,7 @@ class LocalProcessRunner:
             canonicalize_model = spec.simple_model or spec.complex_model
             if canonicalize_model:
                 command.extend(["--canonicalize-model", canonicalize_model])
+            self._append_provider_policy_args(command, spec)
         env = os.environ.copy()
         if spec.env_overrides:
             env.update(spec.env_overrides)
@@ -112,6 +118,17 @@ class LocalProcessRunner:
             log_handle=log_handle,
             log_path=log_path,
         )
+
+    @staticmethod
+    def _append_provider_policy_args(command: list[str], spec: CourseRunSpec) -> None:
+        if spec.max_concurrent_per_run is not None:
+            command.extend(["--max-concurrent-per-run", str(spec.max_concurrent_per_run)])
+        if spec.max_concurrent_global is not None:
+            command.extend(["--max-concurrent-global", str(spec.max_concurrent_global)])
+        if spec.max_call_attempts is not None:
+            command.extend(["--max-call-attempts", str(spec.max_call_attempts)])
+        if spec.max_resume_attempts is not None:
+            command.extend(["--max-resume-attempts", str(spec.max_resume_attempts)])
 
     def snapshot(self, run_id: str) -> RunnerSnapshot | None:
         record = self._processes.get(run_id)

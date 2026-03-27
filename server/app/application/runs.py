@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from processagent.cli import normalize_base_url
 from processagent.pipeline import WRITER_STAGE_SETS
+from processagent.provider_policy import resolve_provider_execution_policy
 from server.app.adapters.cli_runner import CourseRunSpec
 from server.app.adapters.gui_config_store import GuiConfigStore
 from server.app.adapters.runtime_reader import RuntimeSnapshot, RuntimeStateReader
@@ -72,6 +73,10 @@ class _ResolvedRuntimeConfig:
     complex_model: str | None
     timeout_seconds: int | None
     env_overrides: dict[str, str]
+    max_concurrent_per_run: int
+    max_concurrent_global: int
+    max_call_attempts: int
+    max_resume_attempts: int
 
 
 class RunService:
@@ -137,7 +142,13 @@ class RunService:
                 last_error=None,
             )
             self._runs[session.id] = _RunRecord(session=session, last_command=command)
-            self._start_process(record=self._runs[session.id], command=command, book_title=draft.book_title, input_dir=input_dir)
+            self._start_process(
+                record=self._runs[session.id],
+                command=command,
+                book_title=draft.book_title,
+                input_dir=input_dir,
+                runtime_config=runtime_config,
+            )
             self._persist_record(self._runs[session.id])
             return self.get_run(session.id)
 
@@ -172,7 +183,13 @@ class RunService:
                     raise DraftNotReadyError("Course draft is not ready to run")
             else:
                 command = "build-global"
-            self._start_process(record=record, command=command, book_title=draft.book_title, input_dir=input_dir)
+            self._start_process(
+                record=record,
+                command=command,
+                book_title=draft.book_title,
+                input_dir=input_dir,
+                runtime_config=runtime_config,
+            )
             self._persist_record(record)
             return self.get_run(run_id)
 
@@ -448,6 +465,7 @@ class RunService:
         command: Literal["run-course", "resume-course", "clean-course", "build-global"],
         book_title: str,
         input_dir: Path | None,
+        runtime_config: _ResolvedRuntimeConfig | None = None,
     ) -> None:
         record.last_command = command
         is_clean = command == "clean-course"
@@ -468,6 +486,10 @@ class RunService:
                 review_enabled=False if is_clean else record.session.review_enabled,
                 review_mode=None if (is_clean or not record.session.review_enabled) else record.session.review_mode,
                 target_output=None if is_clean else record.session.target_output,
+                max_concurrent_per_run=None if (is_clean or runtime_config is None) else runtime_config.max_concurrent_per_run,
+                max_concurrent_global=None if (is_clean or runtime_config is None) else runtime_config.max_concurrent_global,
+                max_call_attempts=None if (is_clean or runtime_config is None) else runtime_config.max_call_attempts,
+                max_resume_attempts=None if (is_clean or runtime_config is None) else runtime_config.max_resume_attempts,
             )
         )
 
@@ -488,6 +510,7 @@ class RunService:
         draft_config = getattr(draft, "config", None)
         gui_config = self._gui_config_store.load()
         backend = (getattr(draft_config, "provider", None) or gui_config.default_provider or "heuristic")
+        provider_policy = self._resolve_provider_policy(gui_config, backend)
         if backend == "heuristic":
             return _ResolvedRuntimeConfig(
                 backend="heuristic",
@@ -498,6 +521,10 @@ class RunService:
                 complex_model=None,
                 timeout_seconds=None,
                 env_overrides={},
+                max_concurrent_per_run=provider_policy.max_concurrent_per_run,
+                max_concurrent_global=provider_policy.max_concurrent_global,
+                max_call_attempts=provider_policy.max_call_attempts,
+                max_resume_attempts=provider_policy.max_resume_attempts,
             )
 
         provider_defaults = getattr(gui_config.providers, backend)
@@ -532,7 +559,21 @@ class RunService:
             complex_model=complex_model,
             timeout_seconds=timeout_seconds,
             env_overrides=self._build_env_overrides(backend),
+            max_concurrent_per_run=provider_policy.max_concurrent_per_run,
+            max_concurrent_global=provider_policy.max_concurrent_global,
+            max_call_attempts=provider_policy.max_call_attempts,
+            max_resume_attempts=provider_policy.max_resume_attempts,
         )
+
+    def _resolve_provider_policy(self, gui_config, backend: ProviderName):
+        config_policy = getattr(gui_config.provider_policies, backend, None)
+        try:
+            return resolve_provider_execution_policy(
+                provider=backend,
+                config_policy=config_policy,
+            )
+        except ValueError as error:
+            raise RunConfigurationError(str(error)) from error
 
     def _build_env_overrides(self, backend: str) -> dict[str, str]:
         if backend == "heuristic":

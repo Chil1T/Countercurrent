@@ -36,6 +36,10 @@ class StubRunner:
                 "simple_model": spec.simple_model or "",
                 "complex_model": spec.complex_model or "",
                 "timeout_seconds": str(spec.timeout_seconds or ""),
+                "max_concurrent_per_run": str(getattr(spec, "max_concurrent_per_run", "") or ""),
+                "max_concurrent_global": str(getattr(spec, "max_concurrent_global", "") or ""),
+                "max_call_attempts": str(getattr(spec, "max_call_attempts", "") or ""),
+                "max_resume_attempts": str(getattr(spec, "max_resume_attempts", "") or ""),
                 "env_overrides": json.dumps(spec.env_overrides or {}, ensure_ascii=False, sort_keys=True),
                 "review_enabled": str(bool(getattr(spec, "review_enabled", False))).lower(),
                 "review_mode": spec.review_mode or "",
@@ -294,6 +298,49 @@ class RunsApiTests(unittest.TestCase):
         self.assertEqual(self.runner.started_specs[-1]["complex_model"], "gpt-5.4")
         self.assertEqual(self.runner.started_specs[-1]["timeout_seconds"], "180")
         self.assertIn("OPENAI_API_KEY", self.runner.started_specs[-1]["env_overrides"])
+
+    def test_create_run_passes_gui_provider_policy_defaults_into_runner_spec(self) -> None:
+        self.client.put(
+            "/gui-runtime-config",
+            json={
+                "default_provider": "openai",
+                "providers": {
+                    "openai": {
+                        "api_key": "sk-openai",
+                        "base_url": "https://api.openai.com/v1",
+                        "simple_model": "gpt-5.4-mini",
+                        "complex_model": "gpt-5.4",
+                        "timeout_seconds": 180,
+                    },
+                    "openai_compatible": {},
+                    "anthropic": {},
+                },
+                "provider_policies": {
+                    "openai": {
+                        "max_concurrent_per_run": 2,
+                        "max_concurrent_global": 7,
+                        "max_call_attempts": 4,
+                        "max_resume_attempts": 3,
+                    }
+                },
+            },
+        )
+        draft_payload = self.client.post(
+            "/course-drafts",
+            json={
+                "book_title": "Computer Networks",
+                "subtitle_text": "# 第1章 绪论\n\n本节介绍网络分层。",
+            },
+        ).json()
+
+        response = self.client.post("/runs", json={"draft_id": draft_payload["id"]})
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(self.runner.started_specs[-1]["backend"], "openai")
+        self.assertEqual(self.runner.started_specs[-1]["max_concurrent_per_run"], "2")
+        self.assertEqual(self.runner.started_specs[-1]["max_concurrent_global"], "7")
+        self.assertEqual(self.runner.started_specs[-1]["max_call_attempts"], "4")
+        self.assertEqual(self.runner.started_specs[-1]["max_resume_attempts"], "3")
 
     def test_create_run_prefers_course_level_provider_override(self) -> None:
         self.client.put(
@@ -594,6 +641,14 @@ class RunsApiTests(unittest.TestCase):
                     },
                     "anthropic": {},
                 },
+                "provider_policies": {
+                    "openai": {
+                        "max_concurrent_per_run": 2,
+                        "max_concurrent_global": 7,
+                        "max_call_attempts": 4,
+                        "max_resume_attempts": 3,
+                    }
+                },
             },
         )
         draft_id = self.client.post(
@@ -624,6 +679,37 @@ class RunsApiTests(unittest.TestCase):
             "status": "failed",
             "last_error": "pipeline interrupted",
         }
+        self.client.put(
+            "/gui-runtime-config",
+            json={
+                "default_provider": "openai",
+                "providers": {
+                    "openai": {
+                        "api_key": "sk-openai",
+                        "base_url": "https://api.openai.com/v1",
+                        "simple_model": "gpt-5.4-mini",
+                        "complex_model": "gpt-5.4",
+                        "timeout_seconds": 180,
+                    },
+                    "openai_compatible": {
+                        "api_key": "sk-router",
+                        "base_url": "https://openrouter.ai/api/v1/chat/completions",
+                        "simple_model": "openai/gpt-4.1-mini",
+                        "complex_model": "openai/gpt-4.1",
+                        "timeout_seconds": 240,
+                    },
+                    "anthropic": {},
+                },
+                "provider_policies": {
+                    "openai_compatible": {
+                        "max_concurrent_per_run": 5,
+                        "max_concurrent_global": 9,
+                        "max_call_attempts": 6,
+                        "max_resume_attempts": 4,
+                    }
+                },
+            },
+        )
         self.client.post(
             f"/course-drafts/{draft_id}/config",
             json={
@@ -658,6 +744,10 @@ class RunsApiTests(unittest.TestCase):
         )
         self.assertEqual(self.runner.started_specs[-1]["simple_model"], "openai/gpt-4.1-mini")
         self.assertEqual(self.runner.started_specs[-1]["complex_model"], "openai/gpt-4.1")
+        self.assertEqual(self.runner.started_specs[-1]["max_concurrent_per_run"], "5")
+        self.assertEqual(self.runner.started_specs[-1]["max_concurrent_global"], "9")
+        self.assertEqual(self.runner.started_specs[-1]["max_call_attempts"], "6")
+        self.assertEqual(self.runner.started_specs[-1]["max_resume_attempts"], "4")
         self.assertEqual(self.runner.started_specs[-1]["review_enabled"], "true")
         self.assertEqual(self.runner.started_specs[-1]["review_mode"], "standard")
         self.assertEqual(self.runner.started_specs[-1]["target_output"], "interview_knowledge_base")
