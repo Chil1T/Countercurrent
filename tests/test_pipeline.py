@@ -378,6 +378,76 @@ class MetadataRaceHeuristicBackend(HeuristicLLMBackend):
             return order
 
 
+class RetryingSequenceBackend:
+    def __init__(self, stage_outcomes: dict[str, list[Any]]) -> None:
+        self.stage_outcomes = {name: list(outcomes) for name, outcomes in stage_outcomes.items()}
+        self._metadata = threading.local()
+
+    def generate_json(
+        self,
+        agent_name: str,
+        prompt: str,
+        payload: dict[str, Any],
+        model_override: str | None = None,
+    ) -> dict[str, Any]:
+        outcome = self._next_outcome(agent_name)
+        if isinstance(outcome, Exception):
+            self._remember(model_override, status="error", error=str(outcome), output_tokens=None)
+            raise outcome
+        self._remember(model_override, status="completed", error=None, output_tokens=8)
+        return outcome
+
+    def generate_text(
+        self,
+        agent_name: str,
+        prompt: str,
+        payload: dict[str, Any],
+        model_override: str | None = None,
+    ) -> str:
+        outcome = self._next_outcome(agent_name)
+        if isinstance(outcome, Exception):
+            self._remember(model_override, status="error", error=str(outcome), output_tokens=None)
+            raise outcome
+        self._remember(model_override, status="completed", error=None, output_tokens=8)
+        return str(outcome)
+
+    def consume_last_call_metadata(self) -> dict[str, Any] | None:
+        metadata = getattr(self._metadata, "value", None)
+        self._metadata.value = None
+        return metadata
+
+    def _next_outcome(self, agent_name: str) -> Any:
+        if agent_name in self.stage_outcomes and self.stage_outcomes[agent_name]:
+            return self.stage_outcomes[agent_name].pop(0)
+        if agent_name == "curriculum_anchor":
+            return {"chapter_summary": "锚点", "anchors": []}
+        if agent_name == "gap_fill":
+            return {"candidates": []}
+        if agent_name == "pack_plan":
+            return {"writer_profile": "standard_knowledge_pack", "files": []}
+        if agent_name == "review":
+            return {"status": "approved", "issues": []}
+        return f"# {agent_name}\n"
+
+    def _remember(
+        self,
+        model_override: str | None,
+        *,
+        status: str,
+        error: str | None,
+        output_tokens: int | None,
+    ) -> None:
+        self._metadata.value = {
+            "provider": "openai",
+            "model": model_override or "retry-model",
+            "input_tokens": 10,
+            "output_tokens": output_tokens,
+            "duration_ms": 1,
+            "status": status,
+            "error": error,
+        }
+
+
 class PipelineRunnerTest(unittest.TestCase):
     def setUp(self) -> None:
         reset_provider_registry = getattr(provider_policy_module, "reset_provider_permit_registry", None)
@@ -768,6 +838,109 @@ class PipelineRunnerTest(unittest.TestCase):
             }
             self.assertEqual(curriculum_entries["第一章·绪论"]["model"], "第一章·绪论")
             self.assertEqual(curriculum_entries["第二章·模型"]["model"], "第二章·模型")
+
+    def test_run_records_retry_history_in_runtime_state_and_llm_log(self) -> None:
+        from processagent.llm import LLMHTTPError, LLMNetworkError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "captions"
+            output_dir = root / "out"
+            blueprint = make_blueprint()
+            input_dir.mkdir()
+            (input_dir / "第一章·绪论.md").write_text("数据库系统由数据库、硬件、软件和人员组成。", encoding="utf-8")
+            backend = RetryingSequenceBackend(
+                {
+                    "curriculum_anchor": [
+                        LLMHTTPError(status_code=429, detail="busy"),
+                        LLMNetworkError(kind="timeout", message="timed out"),
+                        {"chapter_summary": "锚点", "anchors": []},
+                    ]
+                }
+            )
+            runner = PipelineRunner(
+                config=PipelineConfig(
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    course_blueprint=blueprint,
+                    backend_name="openai",
+                    provider_policy=ProviderExecutionPolicy(
+                        provider="openai",
+                        max_concurrent_per_run=1,
+                        max_concurrent_global=1,
+                        transient_http_statuses=(408, 429, 500, 502, 503, 504),
+                        max_call_attempts=3,
+                        max_resume_attempts=1,
+                    ),
+                ),
+                llm_backend=backend,
+            )
+
+            runner.run()
+
+            runtime_state = json.loads((runner.course_dir / "runtime_state.json").read_text(encoding="utf-8"))
+            step_record = runtime_state["chapters"]["第一章·绪论"]["steps"]["curriculum_anchor"]
+            self.assertEqual(step_record["attempt_count"], 3)
+            self.assertEqual(step_record["last_error_kind"], "network:timeout")
+            self.assertEqual([item["status"] for item in step_record["retry_history"]], ["error", "error", "completed"])
+
+            log_entries = [
+                json.loads(line)
+                for line in (runner.course_dir / "runtime" / "llm_calls.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            curriculum_entries = [entry for entry in log_entries if entry["stage"] == "curriculum_anchor"]
+            self.assertEqual([entry["attempt"] for entry in curriculum_entries], [1, 2, 3])
+            self.assertEqual([entry["status"] for entry in curriculum_entries], ["error", "error", "completed"])
+            self.assertEqual(curriculum_entries[0]["retry_reason"], "transient_http_status:429")
+            self.assertEqual(curriculum_entries[1]["retry_reason"], "transient_network_error:timeout")
+
+    def test_run_records_retry_failure_metadata_in_runtime_state(self) -> None:
+        from processagent.llm import LLMHTTPError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "captions"
+            output_dir = root / "out"
+            blueprint = make_blueprint()
+            input_dir.mkdir()
+            (input_dir / "第一章·绪论.md").write_text("数据库系统由数据库、硬件、软件和人员组成。", encoding="utf-8")
+            backend = RetryingSequenceBackend(
+                {
+                    "curriculum_anchor": [
+                        LLMHTTPError(status_code=429, detail="busy-1"),
+                        LLMHTTPError(status_code=429, detail="busy-2"),
+                        LLMHTTPError(status_code=429, detail="busy-3"),
+                    ]
+                }
+            )
+            runner = PipelineRunner(
+                config=PipelineConfig(
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    course_blueprint=blueprint,
+                    backend_name="openai",
+                    provider_policy=ProviderExecutionPolicy(
+                        provider="openai",
+                        max_concurrent_per_run=1,
+                        max_concurrent_global=1,
+                        transient_http_statuses=(408, 429, 500, 502, 503, 504),
+                        max_call_attempts=3,
+                        max_resume_attempts=1,
+                    ),
+                ),
+                llm_backend=backend,
+            )
+
+            with self.assertRaises(LLMHTTPError):
+                runner.run()
+
+            runtime_state = json.loads((runner.course_dir / "runtime_state.json").read_text(encoding="utf-8"))
+            step_record = runtime_state["chapters"]["第一章·绪论"]["steps"]["curriculum_anchor"]
+            self.assertEqual(step_record["status"], "failed")
+            self.assertEqual(step_record["attempt_count"], 3)
+            self.assertEqual(step_record["last_error_kind"], "http_status:429")
+            self.assertEqual(len(step_record["retry_history"]), 3)
 
     def test_heuristic_run_course_completes_with_slim_writer_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

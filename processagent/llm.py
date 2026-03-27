@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -29,6 +30,20 @@ class LLMBackend(Protocol):
         model_override: str | None = None,
     ) -> str:
         ...
+
+
+class LLMHTTPError(RuntimeError):
+    def __init__(self, *, status_code: int, detail: str) -> None:
+        self.status_code = status_code
+        self.detail = detail
+        super().__init__(f"LLM request failed: {status_code} {detail}")
+
+
+class LLMNetworkError(RuntimeError):
+    def __init__(self, *, kind: str, message: str) -> None:
+        self.kind = kind
+        self.message = message
+        super().__init__(message)
 
 
 def parse_json_text(text: str) -> dict[str, Any]:
@@ -75,7 +90,17 @@ class HttpJsonBackend:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"LLM request failed: {error.code} {detail}") from error
+            raise LLMHTTPError(status_code=error.code, detail=detail) from error
+        except urllib.error.URLError as error:
+            raise _coerce_network_error(error.reason if error.reason is not None else error) from error
+        except TimeoutError as error:
+            raise LLMNetworkError(kind="timeout", message=str(error)) from error
+        except ConnectionResetError as error:
+            raise LLMNetworkError(kind="connection_reset", message=str(error)) from error
+        except OSError as error:
+            if _is_transient_network_os_error(error):
+                raise _coerce_network_error(error) from error
+            raise
 
     def consume_last_call_metadata(self) -> dict[str, Any] | None:
         metadata = getattr(self._call_metadata, "value", None)
@@ -259,6 +284,29 @@ class OpenAIResponsesBackend(HttpJsonBackend):
         if texts:
             return "\n".join(texts)
         raise RuntimeError("OpenAI response did not include text output.")
+
+
+def _coerce_network_error(error: BaseException) -> LLMNetworkError:
+    if isinstance(error, TimeoutError):
+        return LLMNetworkError(kind="timeout", message=str(error))
+    if isinstance(error, ConnectionResetError):
+        return LLMNetworkError(kind="connection_reset", message=str(error))
+    if isinstance(error, socket.timeout):
+        return LLMNetworkError(kind="timeout", message=str(error))
+    if isinstance(error, OSError):
+        if getattr(error, "errno", None) == 104:
+            return LLMNetworkError(kind="connection_reset", message=str(error))
+        if getattr(error, "errno", None) in (110, 111):
+            return LLMNetworkError(kind="connection_error", message=str(error))
+    return LLMNetworkError(kind="urlopen", message=str(error))
+
+
+def _is_transient_network_os_error(error: OSError) -> bool:
+    if isinstance(error, socket.timeout):
+        return True
+    if isinstance(error, ConnectionResetError):
+        return True
+    return getattr(error, "errno", None) in (104, 110, 111)
 
 
 @dataclass

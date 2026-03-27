@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import local
+from threading import Lock, local
 from typing import Any, Callable, TypeVar
 
 from .blueprint import match_chapter_for_transcript, save_blueprint
@@ -25,6 +25,7 @@ from .provider_policy import (
     release_owned_directory,
     try_acquire_owned_directory,
 )
+from .retrying_llm import RetryingLLMBackend
 
 REQUIRED_PACK_FILES = (
     "01-精讲.md",
@@ -278,6 +279,8 @@ class PipelineRunner:
         self.ingest_agent = IngestAgent()
         self.pack_writer_files = PACK_WRITER_FILES
         self.provider_policy = self.config.provider_policy or get_builtin_provider_policy(self.config.backend_name)
+        if not isinstance(self.llm_backend, RetryingLLMBackend):
+            self.llm_backend = RetryingLLMBackend(backend=self.llm_backend, provider_policy=self.provider_policy)
         self.service_coordination_root = get_service_coordination_root()
         self.provider_permit_registry = ProviderPermitRegistry(root_dir=get_provider_coordination_root())
         self.course_blueprint = self.config.course_blueprint or bootstrap_course_blueprint(
@@ -298,6 +301,9 @@ class PipelineRunner:
             now_iso_factory=self._now_iso,
             pipeline_signature=PIPELINE_SIGNATURE,
         )
+        self._pending_step_retry_metadata: dict[tuple[str, str], dict[str, Any]] = {}
+        self._pending_step_retry_metadata_lock = Lock()
+        self._install_step_retry_metadata_bridge()
         self.chapter_execution_runtime = PipelineChapterExecutionRuntime(self)
         self.chapter_planner = ChapterExecutionPlanner(
             runtime=self.chapter_execution_runtime,
@@ -761,41 +767,179 @@ class PipelineRunner:
         if callable(consume):
             metadata = consume()
 
-        duration_ms = int((time.perf_counter() - started_at) * 1000)
-        provider = self.config.backend_name
-        model = model_override or self.config.model or None
-        input_tokens = self._estimate_token_count(f"{prompt}\n{json.dumps(payload, ensure_ascii=False)}")
-        output_tokens = self._estimate_token_count(response) if response is not None else None
-        status = "error" if error else "completed"
-        error_text = str(error) if error else None
+        attempt_entries = self._build_llm_attempt_entries(
+            metadata=metadata,
+            prompt=prompt,
+            payload=payload,
+            response=response,
+            model_override=model_override,
+            started_at=started_at,
+            error=error,
+        )
+        step_metadata = self._build_step_retry_metadata(attempt_entries)
+        if error is None:
+            self._cache_pending_step_retry_metadata(scope, stage, step_metadata)
+        else:
+            self._write_failed_step_retry_metadata(scope, stage, step_metadata)
 
-        if metadata:
-            provider = metadata.get("provider") or provider
-            model = metadata.get("model") or model
-            input_tokens = metadata.get("input_tokens") or input_tokens
-            output_tokens = metadata.get("output_tokens") or output_tokens
-            duration_ms = metadata.get("duration_ms") or duration_ms
-            status = metadata.get("status") or status
-            error_text = metadata.get("error") or error_text
-
-        entry = {
-            "course_id": self.course_blueprint["course_id"],
-            "scope": scope,
-            "stage": stage,
-            "provider": provider,
-            "model": model,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "duration_ms": duration_ms,
-            "status": status,
-            "error": error_text,
-            "response_type": response_type,
-            "logged_at": self._now_iso(),
-            "pipeline_signature": PIPELINE_SIGNATURE,
-        }
         self.llm_call_log_path.parent.mkdir(parents=True, exist_ok=True)
         with self.llm_call_log_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            for entry in attempt_entries:
+                handle.write(
+                    json.dumps(
+                        {
+                            "course_id": self.course_blueprint["course_id"],
+                            "scope": scope,
+                            "stage": stage,
+                            "provider": entry["provider"],
+                            "model": entry["model"],
+                            "input_tokens": entry["input_tokens"],
+                            "output_tokens": entry["output_tokens"],
+                            "duration_ms": entry["duration_ms"],
+                            "status": entry["status"],
+                            "error": entry["error"],
+                            "error_kind": entry["error_kind"],
+                            "attempt": entry["attempt"],
+                            "attempt_count": len(attempt_entries),
+                            "retry_reason": entry["retry_reason"],
+                            "will_retry": entry["will_retry"],
+                            "response_type": response_type,
+                            "logged_at": self._now_iso(),
+                            "pipeline_signature": PIPELINE_SIGNATURE,
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+
+    def _install_step_retry_metadata_bridge(self) -> None:
+        def mark_step_complete(scope: str, step_name: str, require_blueprint: bool = True) -> None:
+            payload = {
+                "status": "completed",
+                "updated_at": self._now_iso(),
+                "blueprint_hash": self.course_blueprint["blueprint_hash"] if require_blueprint else None,
+                "pipeline_signature": PIPELINE_SIGNATURE,
+            }
+            retry_metadata = self._consume_pending_step_retry_metadata(scope, step_name)
+            if retry_metadata:
+                payload.update(retry_metadata)
+
+            def mutate(state: dict[str, Any]) -> None:
+                if scope == "global":
+                    container = state.setdefault("global", {})
+                else:
+                    chapter_state = state.setdefault("chapters", {}).setdefault(scope, {"steps": {}})
+                    container = chapter_state.setdefault("steps", {})
+                existing = container.get(step_name, {})
+                container[step_name] = {**existing, **payload}
+                state["last_error"] = None
+
+            self.runtime_state_guard._mutate(mutate)
+
+        self.runtime_state_guard.mark_step_complete = mark_step_complete
+
+    def _cache_pending_step_retry_metadata(self, scope: str, step_name: str, metadata: dict[str, Any]) -> None:
+        with self._pending_step_retry_metadata_lock:
+            self._pending_step_retry_metadata[(scope, step_name)] = dict(metadata)
+
+    def _consume_pending_step_retry_metadata(self, scope: str, step_name: str) -> dict[str, Any] | None:
+        with self._pending_step_retry_metadata_lock:
+            return self._pending_step_retry_metadata.pop((scope, step_name), None)
+
+    def _write_failed_step_retry_metadata(self, scope: str, step_name: str, metadata: dict[str, Any]) -> None:
+        payload = {
+            "status": "failed",
+            "updated_at": self._now_iso(),
+            "blueprint_hash": self.course_blueprint["blueprint_hash"],
+            "pipeline_signature": PIPELINE_SIGNATURE,
+            **metadata,
+        }
+
+        def mutate(state: dict[str, Any]) -> None:
+            if scope == "global":
+                container = state.setdefault("global", {})
+            else:
+                chapter_state = state.setdefault("chapters", {}).setdefault(scope, {"steps": {}})
+                container = chapter_state.setdefault("steps", {})
+            existing = container.get(step_name, {})
+            container[step_name] = {**existing, **payload}
+            state["last_error"] = {
+                "scope": scope,
+                "step": step_name,
+                "last_error_kind": metadata.get("last_error_kind"),
+            }
+
+        self.runtime_state_guard._mutate(mutate)
+
+    def _build_llm_attempt_entries(
+        self,
+        *,
+        metadata: dict[str, Any] | None,
+        prompt: str,
+        payload: dict[str, Any],
+        response: dict[str, Any] | str | None,
+        model_override: str | None,
+        started_at: float,
+        error: Exception | None,
+    ) -> list[dict[str, Any]]:
+        attempts = metadata.get("attempts") if metadata else None
+        if not attempts:
+            attempts = [
+                {
+                    "attempt": 1,
+                    "provider": (metadata or {}).get("provider") or self.config.backend_name,
+                    "model": (metadata or {}).get("model") or model_override or self.config.model or None,
+                    "input_tokens": (metadata or {}).get("input_tokens")
+                    or self._estimate_token_count(f"{prompt}\n{json.dumps(payload, ensure_ascii=False)}"),
+                    "output_tokens": (metadata or {}).get("output_tokens")
+                    or (self._estimate_token_count(response) if response is not None else None),
+                    "duration_ms": (metadata or {}).get("duration_ms") or int((time.perf_counter() - started_at) * 1000),
+                    "status": (metadata or {}).get("status") or ("error" if error else "completed"),
+                    "error": (metadata or {}).get("error") or (str(error) if error else None),
+                    "error_kind": (metadata or {}).get("last_error_kind"),
+                    "retry_reason": None,
+                    "will_retry": False,
+                }
+            ]
+        normalized: list[dict[str, Any]] = []
+        for index, item in enumerate(attempts, start=1):
+            normalized.append(
+                {
+                    "attempt": item.get("attempt", index),
+                    "provider": item.get("provider") or self.config.backend_name,
+                    "model": item.get("model") or model_override or self.config.model or None,
+                    "input_tokens": item.get("input_tokens")
+                    or self._estimate_token_count(f"{prompt}\n{json.dumps(payload, ensure_ascii=False)}"),
+                    "output_tokens": item.get("output_tokens"),
+                    "duration_ms": item.get("duration_ms") or 0,
+                    "status": item.get("status") or ("error" if error else "completed"),
+                    "error": item.get("error"),
+                    "error_kind": item.get("error_kind"),
+                    "retry_reason": item.get("retry_reason"),
+                    "will_retry": bool(item.get("will_retry", False)),
+                }
+            )
+        return normalized
+
+    def _build_step_retry_metadata(self, attempt_entries: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "attempt_count": len(attempt_entries),
+            "last_error_kind": next(
+                (entry["error_kind"] for entry in reversed(attempt_entries) if entry.get("error_kind")),
+                None,
+            ),
+            "retry_history": [
+                {
+                    "attempt": entry["attempt"],
+                    "status": entry["status"],
+                    "error": entry["error"],
+                    "error_kind": entry["error_kind"],
+                    "retry_reason": entry["retry_reason"],
+                    "will_retry": entry["will_retry"],
+                }
+                for entry in attempt_entries
+            ],
+        }
 
     def _estimate_token_count(self, value: dict[str, Any] | str) -> int:
         text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
