@@ -1,5 +1,36 @@
 # Plans
 
+## 2026-03-27 Runtime Concurrency / Retry / Export
+
+- Status: completed
+- Goal: 为非全局章节主流程引入多章节并发、provider 级限流、临时错误自动恢复，以及严格口径的章节级导出合同，为后续 UI 并发态展示提供稳定 backend/API 基线。
+
+### Scope
+
+- 引入 provider policy registry 与可覆盖默认值
+- 将章节执行从课程级串行主循环中拆出，支持单 run 多章节并发
+- 增加调用级 transient retry 与 run 级自动 `resume`
+- 扩展 `runtime_state.json`、run API、artifact export 合同
+- 同步 runbook、workstream 与 `processagent/AGENTS.md`
+
+### Execution Batches
+
+1. 已完成：provider policy registry 与配置来源优先级
+2. 已完成：章节执行抽象与 checkpoint 安全边界
+3. 已完成：双层并发控制（单 run + provider 全局）
+4. 已完成：调用级 retry 与追责日志
+5. 已完成：run 级自动 `resume` 与章节级状态合同
+6. 已完成：严格口径章节导出与最终产物过滤
+7. 已完成：文档、规则与验证收口
+
+### Validation
+
+- `python -m unittest tests.test_provider_policy tests.test_retry_policy tests.test_pipeline tests.test_cli -v`
+- `python -m unittest server.tests.test_runs_api server.tests.test_artifacts_api -v`
+- `python -m unittest discover -s tests -v`
+- `npm run lint`
+- `npm run build`
+
 ## 2026-03-25 GUI Config / Runflow Refinement
 
 - Status: completed

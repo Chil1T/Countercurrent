@@ -51,6 +51,8 @@ GUI 运行页当前采用下面这组产品状态：
 - 阶段轨道以下面的运行时合同为准：`course_blueprint.json`、`runtime_state.json`
 - `resume` 会继续当前 run 已冻结的流水线身份：`target_output`、`review_enabled`、`review_mode` 与 stage graph
 - `resume` 会重新读取当前 provider routing：`provider`、`base_url`、`api_key`、`simple_model`、`complex_model`、`timeout_seconds`
+- `resume` 也会重新读取当前 provider policy：`max_concurrent_per_run`、`max_concurrent_global`、`max_call_attempts`、`max_resume_attempts`
+- 若章节 run 因 transient error 失败，`GET /runs/{id}` 可能在预算内自动触发一次后台 `resume-course`；`clean-course` 与 permanent failure 不走这条路径
 - 如果要改模板或 Review 策略，请创建新的 run，而不是复用旧 run
 
 ## GUI Runtime Config
@@ -90,9 +92,19 @@ GUI 当前对 runtime config 的解析顺序是：
 - `simple_model`
 - `complex_model`
 - `timeout_seconds`
+- `max_concurrent_per_run`
+- `max_concurrent_global`
+- `max_call_attempts`
+- `max_resume_attempts`
 - `review_mode`
 - `review_enabled`
 - `template -> target_output`
+
+provider policy 当前的默认与覆盖边界是：
+
+- 内置默认值覆盖 `openai`、`openai_compatible`、`anthropic`、`heuristic`、`stub`
+- GUI 当前只支持 provider 级默认覆盖：`gui-config.json` 的 `provider_policies.<provider>`
+- GUI 当前还不支持课程级 provider policy 覆盖；单次 run 的 provider policy override 仍属于 CLI/runtime 能力
 
 当前仍未接入 `run-course` runtime contract 的配置包括：
 
@@ -158,11 +170,12 @@ GUI 当前采用两层模型路由：
 - GUI 的“更新全局汇总”会单独创建一个 `run_kind = global`
 - `review` 默认关闭；可以由课程默认值打开，也可以在单次 run 时覆盖
 - `quarantine` 已移除；review 只产出提示报告，不再隔离章节
-- 单次章节 run 当前是串行执行：
-  - transcript 章节循环串行
+- 单次章节 run 当前支持“多章节并发 + 双层限流”：
+  - transcript 章节循环按 `max_concurrent_per_run` 限制并发
+  - provider permit 按 `max_concurrent_global` 做全服务共享限流
   - 单章 stage 串行
   - active writers 串行
-- provider 压力主要来自 hosted writer/review/global 阶段，以及多 run 并发，不来自单次 run 内部 fan-out
+- provider 压力当前由 hosted stage 成本、章节并发额度和多 run 并发共同决定
 - 同一个 `course_id` 当前只允许一个活跃 run；当某门课已有 `running` 的章节 run 或 global run 时，GUI/API 会拒绝为该课程再启动新的 run，避免并发写坏同一份 `out/courses/<course_id>` runtime。
 
 ## Writer Profile
@@ -419,9 +432,19 @@ out/_gui/frontend-dev.log
 - 运行页右侧已接入日志面板：先拉取 log preview，再通过 `run.log` 事件流增量追加。
 - 运行页摘要卡现在会明确显示 `backend`、`hosted/heuristic`、`simple_model`、`complex_model`、`review_mode`、`target_output`，用于区分“页面已打开”和“runtime 实际采用的配置”。
 - `RunSession` 当前会持久化到 `out/_gui/runs/<run_id>/session.json`，后端重启后，已存在的 run 页面不再直接因内存态丢失而 404。
+- `RunSession` 当前额外暴露 `chapter_progress[]`，每章会返回 `status`、`current_step`、`completed_step_count`、`total_step_count`、`export_ready`，供并发态运行页与结果页消费。
+- `chapter_progress[].export_ready` 只在当前 `target_output` + `review_enabled` 所要求的全部章节 step 都完成时为 `true`；不会因为 `notebooklm/*` 或某个中间文件已存在就提前变成 completed。
 - 历史 run 的 `process.log` 当前也支持在后端重启后恢复读取；日志面板不再依赖 runner 的内存 snapshot 才能显示旧日志。
 - `runtime_state.json` 当前会额外持久化 `run_identity`，用于恢复时锁定 `review_enabled`、`review_mode` 和 `target_output`。
+- `runtime_state.json` 当前也会在 step 级记录 `attempt_count`、`last_error_kind`、`retry_history`，用于 transient retry 与自动恢复追责：
+  - `attempt_count`：该 step 实际发起的调用次数
+  - `retry_history`：按尝试顺序记录每次 error/completed 与 `will_retry`
+  - `last_error_kind`：最近一次失败尝试的错误类型；即使最终一次已成功，也可能保留最后一次 transient error 的种类
 - 结果页已接通 artifacts tree、文件预览、review 摘要和 ZIP 导出。
+- 结果页导出当前支持两类过滤参数：
+  - `completed_chapters_only=true`：只导出严格口径 `export_ready` 的章节作用域文件；课程根文件与非章节文件仍保留
+  - `final_outputs_only=true`：只导出 `chapters/<chapter_id>/notebooklm/*`
+- 两个过滤参数同时存在时，结果是“严格 completed chapter”与“最终产物目录”的交集。
 - 结果页文件树当前按 `章节 -> 最终产物 / 中间数据 -> 文件` 分层；若对应 run 尚未完成，会显示“文件仍在生成中”的提示，而不是把空树误判为失败。
 - 如果结果页在 run 仍未完成时已经打开，artifact tree 与 review summary 当前会在 `run.update` 推进时自动刷新，不需要手动刷新页面。
 - FastAPI 默认以仓库根目录推导 `workspace_root` 与 `out/`，结果页不再依赖 uvicorn 是从哪个当前目录启动的。
@@ -434,13 +457,19 @@ out/_gui/frontend-dev.log
   - `simple_model`
   - `complex_model`
   - `timeout_seconds`
+  - `max_concurrent_per_run`
+  - `max_concurrent_global`
+  - `max_call_attempts`
+  - `max_resume_attempts`
   - `review_enabled`
   - `template` -> `policy.target_output`
   - `review_mode` -> `policy.review_mode`
+- provider policy 这四项当前从 provider 默认层进入 runtime，不跟随课程草稿单独覆盖。
 - `build-blueprint` / `run-course` 当前会把 `simple_model` 中映射给 `blueprint_builder` 的 override 直接用于 blueprint 生成阶段，不再回落到 provider 默认模型。
 - 如果草稿尚未保存模板配置，GUI 运行默认按 `interview_knowledge_base` 解释章节 writer 集合与阶段轨道，不再错误回落到 `standard_knowledge_pack`。
 - `clean-course` 如果在运行中遇到后端重启，状态恢复会优先依据课程 runtime 目录是否已删除来判断 `cleaned`，避免清理完成后仍长期显示 `running`。
 - 运行状态恢复当前会以 `runtime_state.json` 里的实际 chapter scopes 为准，而不是 blueprint 中声明的章节总数；当 TOC 章节数和实际输入章节数不一致时，重启后也不会因为完成计数永远达不到 blueprint 总数而卡在 `running`。
-- `content_density` 和 `export ZIP` 仍然是产品层配置，还没有进入 `run-course` 的 runtime contract。
+- `GET /runs/{id}` 的自动恢复只覆盖 failed 的章节 run，并要求 `last_error_kind` 仍被判定为 transient 且 `max_resume_attempts` 预算未耗尽；permanent failure、`clean-course` 失败和 provider 配置丢失后的重启恢复都不会自动 `resume-course`。
+- `content_density` 仍然是产品层配置，没有进入 `run-course` 的 runtime contract；结果页导出过滤则是 artifacts API 合同，不属于 pipeline identity。
 - checkpoint 有效性现在同时受 `blueprint_hash` 和 pipeline signature 约束；当 pipeline/runtime contract 变更时，旧产物会在下一次运行时自动失效并重跑。
 - 同课程名当前继续复用同一 `course_id`；新章节会追加到同一课程目录。
