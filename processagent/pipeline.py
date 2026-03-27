@@ -144,6 +144,91 @@ class IngestAgent:
 
 
 @dataclass
+class PipelineChapterExecutionRuntime:
+    runner: "PipelineRunner"
+
+    @property
+    def course_dir(self) -> Path:
+        return self.runner.course_dir
+
+    @property
+    def review_enabled(self) -> bool:
+        return self.runner.config.enable_review
+
+    @property
+    def writer_names(self) -> tuple[str, ...]:
+        return self.runner._active_writer_names()
+
+    @property
+    def writer_file_map(self) -> dict[str, str]:
+        return self.runner.pack_writer_files
+
+    def slim_course_blueprint(self) -> dict[str, Any]:
+        return self.runner._slim_course_blueprint()
+
+    def ingest_transcript(self, chapter_id: str, transcript_text: str) -> dict[str, Any]:
+        return self.runner.ingest_agent.run(chapter_id=chapter_id, transcript_text=transcript_text)
+
+    def run_json_stage(self, stage_name: str, payload: dict[str, Any], *, scope: str) -> dict[str, Any]:
+        return self.runner._run_agent(stage_name, payload, scope=scope)
+
+    def run_text_stage(self, stage_name: str, payload: dict[str, Any], *, scope: str) -> str:
+        return self.runner._run_text_agent(stage_name, payload, scope=scope)
+
+    def write_json(self, path: Path, data: dict[str, Any]) -> None:
+        self.runner._write_json(path, data)
+
+    def build_pack_payload(
+        self,
+        *,
+        chapter_blueprint: dict[str, Any],
+        normalized: dict[str, Any],
+        topic_map: dict[str, Any],
+        augmentation: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self.runner._build_pack_payload(
+            chapter_blueprint=chapter_blueprint,
+            normalized=normalized,
+            topic_map=topic_map,
+            augmentation=augmentation,
+        )
+
+    def build_writer_payload(
+        self,
+        *,
+        chapter_blueprint: dict[str, Any],
+        normalized: dict[str, Any],
+        topic_map: dict[str, Any],
+        augmentation: dict[str, Any],
+        pack_plan: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self.runner._build_writer_payload(
+            chapter_blueprint=chapter_blueprint,
+            normalized=normalized,
+            topic_map=topic_map,
+            augmentation=augmentation,
+            pack_plan=pack_plan,
+        )
+
+    def build_review_payload(
+        self,
+        *,
+        chapter_blueprint: dict[str, Any],
+        normalized: dict[str, Any],
+        topic_map: dict[str, Any],
+        augmentation: dict[str, Any],
+        pack: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self.runner._build_review_payload(
+            chapter_blueprint=chapter_blueprint,
+            normalized=normalized,
+            topic_map=topic_map,
+            augmentation=augmentation,
+            pack=pack,
+        )
+
+
+@dataclass
 class PipelineRunner:
     config: PipelineConfig
     llm_backend: LLMBackend | None = None
@@ -172,8 +257,15 @@ class PipelineRunner:
             now_iso_factory=self._now_iso,
             pipeline_signature=PIPELINE_SIGNATURE,
         )
-        self.chapter_planner = ChapterExecutionPlanner(runner=self, runtime_state_guard=self.runtime_state_guard)
-        self.chapter_worker = ChapterWorker(runner=self, runtime_state_guard=self.runtime_state_guard)
+        self.chapter_execution_runtime = PipelineChapterExecutionRuntime(self)
+        self.chapter_planner = ChapterExecutionPlanner(
+            runtime=self.chapter_execution_runtime,
+            runtime_state_guard=self.runtime_state_guard,
+        )
+        self.chapter_worker = ChapterWorker(
+            runtime=self.chapter_execution_runtime,
+            runtime_state_guard=self.runtime_state_guard,
+        )
 
     def run(self) -> None:
         if self.config.clean_output and self.course_dir.exists():

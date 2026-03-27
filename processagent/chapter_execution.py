@@ -5,7 +5,68 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
-from typing import Any, Callable
+from typing import Any, Callable, Mapping, Protocol
+
+
+class ChapterExecutionRuntime(Protocol):
+    course_dir: Path
+    review_enabled: bool
+    writer_names: tuple[str, ...]
+    writer_file_map: Mapping[str, str]
+
+    def slim_course_blueprint(self) -> dict[str, Any]: ...
+
+    def ingest_transcript(self, chapter_id: str, transcript_text: str) -> dict[str, Any]: ...
+
+    def run_json_stage(self, stage_name: str, payload: dict[str, Any], *, scope: str) -> dict[str, Any]: ...
+
+    def run_text_stage(self, stage_name: str, payload: dict[str, Any], *, scope: str) -> str: ...
+
+    def write_json(self, path: Path, data: dict[str, Any]) -> None: ...
+
+    def build_pack_payload(
+        self,
+        *,
+        chapter_blueprint: dict[str, Any],
+        normalized: dict[str, Any],
+        topic_map: dict[str, Any],
+        augmentation: dict[str, Any],
+    ) -> dict[str, Any]: ...
+
+    def build_writer_payload(
+        self,
+        *,
+        chapter_blueprint: dict[str, Any],
+        normalized: dict[str, Any],
+        topic_map: dict[str, Any],
+        augmentation: dict[str, Any],
+        pack_plan: dict[str, Any],
+    ) -> dict[str, Any]: ...
+
+    def build_review_payload(
+        self,
+        *,
+        chapter_blueprint: dict[str, Any],
+        normalized: dict[str, Any],
+        topic_map: dict[str, Any],
+        augmentation: dict[str, Any],
+        pack: dict[str, Any],
+    ) -> dict[str, Any]: ...
+
+
+@dataclass(frozen=True)
+class ChapterStageDefinition:
+    name: str
+    stage_kind: str
+    relative_path: tuple[str, ...]
+    require_blueprint: bool = True
+
+
+@dataclass(frozen=True)
+class PlannedChapterStep:
+    definition: ChapterStageDefinition
+    path: Path
+    should_run: bool
 
 
 @dataclass(frozen=True)
@@ -17,9 +78,11 @@ class ChapterExecutionPlan:
     intermediate_dir: Path
     notebooklm_dir: Path
     review_path: Path
-    writer_names: tuple[str, ...]
-    pending_steps: tuple[str, ...]
-    review_enabled: bool
+    steps: tuple[PlannedChapterStep, ...]
+
+    @property
+    def pending_steps(self) -> tuple[str, ...]:
+        return tuple(step.definition.name for step in self.steps if step.should_run)
 
 
 class RuntimeStateMutationGuard:
@@ -154,35 +217,39 @@ class RuntimeStateMutationGuard:
 
 
 class ChapterExecutionPlanner:
-    def __init__(self, *, runner: Any, runtime_state_guard: RuntimeStateMutationGuard) -> None:
-        self.runner = runner
+    def __init__(self, *, runtime: ChapterExecutionRuntime, runtime_state_guard: RuntimeStateMutationGuard) -> None:
+        self.runtime = runtime
         self.runtime_state_guard = runtime_state_guard
 
     def plan(self, *, transcript_file: Path, chapter_blueprint: dict[str, Any]) -> ChapterExecutionPlan:
         chapter_id = chapter_blueprint["chapter_id"]
-        chapter_dir = self.runner.course_dir / "chapters" / chapter_id
+        chapter_dir = self.runtime.course_dir / "chapters" / chapter_id
         intermediate_dir = chapter_dir / "intermediate"
         notebooklm_dir = chapter_dir / "notebooklm"
         review_path = chapter_dir / "review_report.json"
-        writer_names = self.runner._active_writer_names()
 
-        pending_steps: list[str] = []
+        steps: list[PlannedChapterStep] = []
         upstream_invalidated = False
-
-        for step_name, path, require_blueprint in self._step_specs(
-            chapter_id=chapter_id,
-            intermediate_dir=intermediate_dir,
-            notebooklm_dir=notebooklm_dir,
-            review_path=review_path,
-            writer_names=writer_names,
+        for definition in build_chapter_stage_definitions(
+            writer_names=self.runtime.writer_names,
+            writer_file_map=self.runtime.writer_file_map,
+            review_enabled=self.runtime.review_enabled,
         ):
-            if upstream_invalidated or not self.runtime_state_guard.step_is_valid(
+            path = chapter_dir.joinpath(*definition.relative_path)
+            should_run = upstream_invalidated or not self.runtime_state_guard.step_is_valid(
                 scope=chapter_id,
-                step_name=step_name,
+                step_name=definition.name,
                 required_paths=(path,),
-                require_blueprint=require_blueprint,
-            ):
-                pending_steps.append(step_name)
+                require_blueprint=definition.require_blueprint,
+            )
+            steps.append(
+                PlannedChapterStep(
+                    definition=definition,
+                    path=path,
+                    should_run=should_run,
+                )
+            )
+            if should_run:
                 upstream_invalidated = True
 
         return ChapterExecutionPlan(
@@ -193,205 +260,199 @@ class ChapterExecutionPlanner:
             intermediate_dir=intermediate_dir,
             notebooklm_dir=notebooklm_dir,
             review_path=review_path,
-            writer_names=writer_names,
-            pending_steps=tuple(pending_steps),
-            review_enabled=self.runner.config.enable_review,
+            steps=tuple(steps),
         )
-
-    def _step_specs(
-        self,
-        *,
-        chapter_id: str,
-        intermediate_dir: Path,
-        notebooklm_dir: Path,
-        review_path: Path,
-        writer_names: tuple[str, ...],
-    ) -> list[tuple[str, Path, bool]]:
-        specs: list[tuple[str, Path, bool]] = [
-            ("ingest", intermediate_dir / "normalized_transcript.json", False),
-            ("curriculum_anchor", intermediate_dir / "topic_anchor_map.json", True),
-            ("gap_fill", intermediate_dir / "augmentation_candidates.json", True),
-            ("pack_plan", intermediate_dir / "pack_plan.json", True),
-        ]
-        for writer_name in writer_names:
-            file_name = self.runner.pack_writer_files[writer_name]
-            specs.append((writer_name, notebooklm_dir / file_name, True))
-        if self.runner.config.enable_review:
-            specs.append(("review", review_path, True))
-        return specs
 
 
 class ChapterWorker:
-    def __init__(self, *, runner: Any, runtime_state_guard: RuntimeStateMutationGuard) -> None:
-        self.runner = runner
+    def __init__(self, *, runtime: ChapterExecutionRuntime, runtime_state_guard: RuntimeStateMutationGuard) -> None:
+        self.runtime = runtime
         self.runtime_state_guard = runtime_state_guard
 
     def run(self, plan: ChapterExecutionPlan) -> None:
         plan.intermediate_dir.mkdir(parents=True, exist_ok=True)
         plan.notebooklm_dir.mkdir(parents=True, exist_ok=True)
-        pending_steps = set(plan.pending_steps)
+        step_results: dict[str, Any] = {}
 
-        normalized_path = plan.intermediate_dir / "normalized_transcript.json"
-        if "ingest" in pending_steps:
-            normalized = self.runner.ingest_agent.run(
-                chapter_id=plan.chapter_id,
-                transcript_text=plan.transcript_file.read_text(encoding="utf-8"),
-            )
-            self.runner._write_json(normalized_path, normalized)
-            self.runtime_state_guard.mark_step_complete(plan.chapter_id, "ingest", require_blueprint=False)
-        else:
-            normalized = self._require_json(
-                chapter_id=plan.chapter_id,
-                step_name="ingest",
-                path=normalized_path,
-                require_blueprint=False,
-            )
-
-        topic_map_path = plan.intermediate_dir / "topic_anchor_map.json"
-        if "curriculum_anchor" in pending_steps:
-            topic_map = self.runner._run_agent(
-                "curriculum_anchor",
-                {
-                    "course_blueprint": self.runner._slim_course_blueprint(),
-                    "chapter_blueprint": plan.chapter_blueprint,
-                    "normalized_transcript": normalized,
-                },
-                scope=plan.chapter_id,
-            )
-            self.runner._write_json(topic_map_path, topic_map)
-            self.runtime_state_guard.mark_step_complete(plan.chapter_id, "curriculum_anchor")
-        else:
-            topic_map = self._require_json(
-                chapter_id=plan.chapter_id,
-                step_name="curriculum_anchor",
-                path=topic_map_path,
-            )
-
-        augmentation_path = plan.intermediate_dir / "augmentation_candidates.json"
-        if "gap_fill" in pending_steps:
-            augmentation = self.runner._run_agent(
-                "gap_fill",
-                {
-                    "course_blueprint": self.runner._slim_course_blueprint(),
-                    "chapter_blueprint": plan.chapter_blueprint,
-                    "normalized_transcript": normalized,
-                    "topic_anchor_map": topic_map,
-                },
-                scope=plan.chapter_id,
-            )
-            self.runner._write_json(augmentation_path, augmentation)
-            self.runtime_state_guard.mark_step_complete(plan.chapter_id, "gap_fill")
-        else:
-            augmentation = self._require_json(
-                chapter_id=plan.chapter_id,
-                step_name="gap_fill",
-                path=augmentation_path,
-            )
-
-        pack_plan_payload = self.runner._build_pack_payload(
-            chapter_blueprint=plan.chapter_blueprint,
-            normalized=normalized,
-            topic_map=topic_map,
-            augmentation=augmentation,
-        )
-        pack_plan_path = plan.intermediate_dir / "pack_plan.json"
-        if "pack_plan" in pending_steps:
-            pack_plan = self.runner._run_agent("pack_plan", pack_plan_payload, scope=plan.chapter_id)
-            self.runner._write_json(pack_plan_path, pack_plan)
-            self.runtime_state_guard.mark_step_complete(plan.chapter_id, "pack_plan")
-        else:
-            pack_plan = self._require_json(
-                chapter_id=plan.chapter_id,
-                step_name="pack_plan",
-                path=pack_plan_path,
-            )
-
-        pack_files: dict[str, str] = {}
-        writer_payload = self.runner._build_writer_payload(
-            chapter_blueprint=plan.chapter_blueprint,
-            normalized=normalized,
-            topic_map=topic_map,
-            augmentation=augmentation,
-            pack_plan=pack_plan,
-        )
-        for writer_name in plan.writer_names:
-            file_name = self.runner.pack_writer_files[writer_name]
-            output_path = plan.notebooklm_dir / file_name
-            if writer_name in pending_steps:
-                content = self.runner._run_text_agent(
-                    writer_name,
-                    writer_payload,
-                    scope=plan.chapter_id,
+        for step in plan.steps:
+            if step.should_run:
+                result = self._execute_step(plan, step, step_results)
+                self._persist_step_output(plan, step, result)
+                self.runtime_state_guard.mark_step_complete(
+                    plan.chapter_id,
+                    step.definition.name,
+                    require_blueprint=step.definition.require_blueprint,
                 )
-                output_path.write_text(content, encoding="utf-8")
-                self.runtime_state_guard.mark_step_complete(plan.chapter_id, writer_name)
             else:
-                content = self._require_text(
-                    chapter_id=plan.chapter_id,
-                    step_name=writer_name,
-                    path=output_path,
-                )
-            pack_files[file_name] = content
+                result = self._load_completed_step(plan, step)
+            step_results[step.definition.name] = result
 
-        pack = {"files": pack_files}
-        if plan.review_enabled:
-            if "review" in pending_steps:
-                review = self.runner._run_agent(
-                    "review",
-                    self.runner._build_review_payload(
-                        chapter_blueprint=plan.chapter_blueprint,
-                        normalized=normalized,
-                        topic_map=topic_map,
-                        augmentation=augmentation,
-                        pack=pack,
-                    ),
-                    scope=plan.chapter_id,
-                )
-                self.runner._write_json(plan.review_path, review)
-                self.runtime_state_guard.mark_step_complete(plan.chapter_id, "review")
-            else:
-                self._require_json(
-                    chapter_id=plan.chapter_id,
-                    step_name="review",
-                    path=plan.review_path,
-                )
-        else:
+        if not self.runtime.review_enabled:
             if plan.review_path.exists():
                 plan.review_path.unlink()
             self.runtime_state_guard.clear_step_record(plan.chapter_id, "review")
 
-    def _require_json(
+    def _execute_step(
         self,
-        *,
-        chapter_id: str,
-        step_name: str,
-        path: Path,
-        require_blueprint: bool = True,
-    ) -> dict[str, Any]:
-        value = self.runtime_state_guard.load_step_json(
-            chapter_id=chapter_id,
-            step_name=step_name,
-            path=path,
-            require_blueprint=require_blueprint,
-        )
+        plan: ChapterExecutionPlan,
+        step: PlannedChapterStep,
+        step_results: dict[str, Any],
+    ) -> dict[str, Any] | str:
+        name = step.definition.name
+        if name == "ingest":
+            return self.runtime.ingest_transcript(
+                chapter_id=plan.chapter_id,
+                transcript_text=plan.transcript_file.read_text(encoding="utf-8"),
+            )
+        if name == "curriculum_anchor":
+            return self.runtime.run_json_stage(
+                "curriculum_anchor",
+                {
+                    "course_blueprint": self.runtime.slim_course_blueprint(),
+                    "chapter_blueprint": plan.chapter_blueprint,
+                    "normalized_transcript": step_results["ingest"],
+                },
+                scope=plan.chapter_id,
+            )
+        if name == "gap_fill":
+            return self.runtime.run_json_stage(
+                "gap_fill",
+                {
+                    "course_blueprint": self.runtime.slim_course_blueprint(),
+                    "chapter_blueprint": plan.chapter_blueprint,
+                    "normalized_transcript": step_results["ingest"],
+                    "topic_anchor_map": step_results["curriculum_anchor"],
+                },
+                scope=plan.chapter_id,
+            )
+        if name == "pack_plan":
+            return self.runtime.run_json_stage(
+                "pack_plan",
+                self.runtime.build_pack_payload(
+                    chapter_blueprint=plan.chapter_blueprint,
+                    normalized=step_results["ingest"],
+                    topic_map=step_results["curriculum_anchor"],
+                    augmentation=step_results["gap_fill"],
+                ),
+                scope=plan.chapter_id,
+            )
+        if name in self.runtime.writer_names:
+            return self.runtime.run_text_stage(
+                name,
+                self.runtime.build_writer_payload(
+                    chapter_blueprint=plan.chapter_blueprint,
+                    normalized=step_results["ingest"],
+                    topic_map=step_results["curriculum_anchor"],
+                    augmentation=step_results["gap_fill"],
+                    pack_plan=step_results["pack_plan"],
+                ),
+                scope=plan.chapter_id,
+            )
+        if name == "review":
+            return self.runtime.run_json_stage(
+                "review",
+                self.runtime.build_review_payload(
+                    chapter_blueprint=plan.chapter_blueprint,
+                    normalized=step_results["ingest"],
+                    topic_map=step_results["curriculum_anchor"],
+                    augmentation=step_results["gap_fill"],
+                    pack=self._build_pack(step_results),
+                ),
+                scope=plan.chapter_id,
+            )
+        raise KeyError(f"Unsupported chapter step: {name}")
+
+    def _persist_step_output(
+        self,
+        plan: ChapterExecutionPlan,
+        step: PlannedChapterStep,
+        result: dict[str, Any] | str,
+    ) -> None:
+        if step.definition.stage_kind in {"ingest", "json", "review"}:
+            if not isinstance(result, dict):
+                raise TypeError(f"Expected JSON result for step {step.definition.name}")
+            self.runtime.write_json(step.path, result)
+            return
+        if not isinstance(result, str):
+            raise TypeError(f"Expected text result for step {step.definition.name}")
+        step.path.parent.mkdir(parents=True, exist_ok=True)
+        step.path.write_text(result, encoding="utf-8")
+
+    def _load_completed_step(
+        self,
+        plan: ChapterExecutionPlan,
+        step: PlannedChapterStep,
+    ) -> dict[str, Any] | str:
+        if step.definition.stage_kind in {"ingest", "json", "review"}:
+            value = self.runtime_state_guard.load_step_json(
+                chapter_id=plan.chapter_id,
+                step_name=step.definition.name,
+                path=step.path,
+                require_blueprint=step.definition.require_blueprint,
+            )
+        else:
+            value = self.runtime_state_guard.load_step_text(
+                chapter_id=plan.chapter_id,
+                step_name=step.definition.name,
+                path=step.path,
+                require_blueprint=step.definition.require_blueprint,
+            )
         if value is None:
-            raise RuntimeError(f"Missing checkpoint for {chapter_id}:{step_name}")
+            raise RuntimeError(f"Missing checkpoint for {plan.chapter_id}:{step.definition.name}")
         return value
 
-    def _require_text(
-        self,
-        *,
-        chapter_id: str,
-        step_name: str,
-        path: Path,
-        require_blueprint: bool = True,
-    ) -> str:
-        value = self.runtime_state_guard.load_step_text(
-            chapter_id=chapter_id,
-            step_name=step_name,
-            path=path,
-            require_blueprint=require_blueprint,
+    def _build_pack(self, step_results: dict[str, Any]) -> dict[str, Any]:
+        files = {
+            self.runtime.writer_file_map[writer_name]: step_results[writer_name]
+            for writer_name in self.runtime.writer_names
+            if writer_name in step_results
+        }
+        return {"files": files}
+
+
+def build_chapter_stage_definitions(
+    *,
+    writer_names: tuple[str, ...],
+    writer_file_map: Mapping[str, str],
+    review_enabled: bool,
+) -> tuple[ChapterStageDefinition, ...]:
+    definitions = [
+        ChapterStageDefinition(
+            name="ingest",
+            stage_kind="ingest",
+            relative_path=("intermediate", "normalized_transcript.json"),
+            require_blueprint=False,
+        ),
+        ChapterStageDefinition(
+            name="curriculum_anchor",
+            stage_kind="json",
+            relative_path=("intermediate", "topic_anchor_map.json"),
+        ),
+        ChapterStageDefinition(
+            name="gap_fill",
+            stage_kind="json",
+            relative_path=("intermediate", "augmentation_candidates.json"),
+        ),
+        ChapterStageDefinition(
+            name="pack_plan",
+            stage_kind="json",
+            relative_path=("intermediate", "pack_plan.json"),
+        ),
+    ]
+    for writer_name in writer_names:
+        definitions.append(
+            ChapterStageDefinition(
+                name=writer_name,
+                stage_kind="writer",
+                relative_path=("notebooklm", writer_file_map[writer_name]),
+            )
         )
-        if value is None:
-            raise RuntimeError(f"Missing checkpoint for {chapter_id}:{step_name}")
-        return value
+    if review_enabled:
+        definitions.append(
+            ChapterStageDefinition(
+                name="review",
+                stage_kind="review",
+                relative_path=("review_report.json",),
+            )
+        )
+    return tuple(definitions)
