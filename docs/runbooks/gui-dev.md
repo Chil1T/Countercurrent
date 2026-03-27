@@ -212,6 +212,9 @@ out/courses/<course_id>/runtime/llm_calls.jsonl
 - 前端使用 `npx next dev --hostname 127.0.0.1 --port 3000`
 - 日志写入 `out/_gui/backend-dev.log` 与 `out/_gui/frontend-dev.log`
 - 轮询 `healthz` 与 `/courses/new/input`，只有两者都返回 `200` 才算启动成功
+- 当前 `PowerShell` 窗口会保留为 controller window
+- 后端与前端子进程窗口默认隐藏，不再额外弹出两个空白 `cmd.exe`
+- 关闭 controller window 或按 `Ctrl+C` 时，会自动停止这两个子进程
 
 常用可选参数：
 
@@ -231,6 +234,7 @@ out/courses/<course_id>/runtime/llm_calls.jsonl
 - `SkipBackendInstall` / `SkipFrontendInstall` 适合依赖已安装的重复启动
 - `NoCleanPorts` 适合你明确知道现有 `3000/8000` 服务应保留时使用
 - `DryRun` 只打印将执行的命令、日志路径和探活地址，不真正启动进程
+- 非 `DryRun` 模式下，脚本不会自动退出；controller window 会持续存活，用于托管和回收子进程
 
 ### Frontend
 
@@ -293,7 +297,19 @@ npx next dev --hostname 127.0.0.1 --port 3000
 
 ### Background Start
 
-需要后台常驻时，不要依赖 `cmd /k`。更稳的是输出到日志文件：
+当前一键脚本已经把“后台子进程 + 日志落盘 + 控制窗口回收”整合好了。若你直接用：
+
+```powershell
+.\start-gui-local.ps1
+```
+
+推荐把当前 `PowerShell` 窗口视为 controller window：
+
+- 可以看到启动成功/失败、探活状态和子进程异常退出信息
+- 不会再额外弹出两个空白子窗口
+- 关闭这个窗口时，前后端会一起停止
+
+只有在你明确不想使用一键脚本时，再手动做后台常驻。手动方式仍然建议输出到日志文件：
 
 后端：
 
@@ -312,6 +328,7 @@ Start-Process cmd.exe -ArgumentList '/c','npx next dev --hostname 127.0.0.1 --po
 - `cmd /k` 适合人工盯日志，但关窗口就会停服务
 - `cmd /c ... > log 2>&1` 更适合后台常驻
 - 不要把 `Start-Process` 的 `RedirectStandardOutput` 和 `RedirectStandardError` 指到同一个文件；PowerShell 会直接报错
+- 一键脚本当前不再依赖弹出式 `cmd.exe` 窗口托管服务，而是由 controller window 统一回收子进程
 
 ### Standard Health Checks
 
@@ -356,6 +373,7 @@ out/_gui/frontend-dev.log
 - 依赖缺失
 - dev server 没真正监听
 - 启动命令被窗口关闭打断
+- controller window 报出的子进程异常退出
 
 ## Browser QA
 

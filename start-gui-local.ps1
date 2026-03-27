@@ -16,6 +16,121 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$script:TrackedProcesses = @()
+$script:ChildProcessJobHandle = [IntPtr]::Zero
+$script:CleanupPerformed = $false
+
+function Ensure-JobObjectType {
+    if ("JobObjectNative" -as [type]) {
+        return
+    }
+
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class JobObjectNative
+{
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr CreateJobObject(IntPtr lpJobAttributes, string lpName);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetInformationJobObject(
+        IntPtr hJob,
+        JOBOBJECTINFOCLASS JobObjectInfoClass,
+        IntPtr lpJobObjectInfo,
+        UInt32 cbJobObjectInfoLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool CloseHandle(IntPtr hObject);
+
+    public const UInt32 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+
+    public enum JOBOBJECTINFOCLASS
+    {
+        JobObjectExtendedLimitInformation = 9
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct JOBOBJECT_BASIC_LIMIT_INFORMATION
+    {
+        public Int64 PerProcessUserTimeLimit;
+        public Int64 PerJobUserTimeLimit;
+        public UInt32 LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public UInt32 ActiveProcessLimit;
+        public IntPtr Affinity;
+        public UInt32 PriorityClass;
+        public UInt32 SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct IO_COUNTERS
+    {
+        public UInt64 ReadOperationCount;
+        public UInt64 WriteOperationCount;
+        public UInt64 OtherOperationCount;
+        public UInt64 ReadTransferCount;
+        public UInt64 WriteTransferCount;
+        public UInt64 OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+    {
+        public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+        public IO_COUNTERS IoInfo;
+        public UIntPtr ProcessMemoryLimit;
+        public UIntPtr JobMemoryLimit;
+        public UIntPtr PeakProcessMemoryUsed;
+        public UIntPtr PeakJobMemoryUsed;
+    }
+}
+"@
+}
+
+function Initialize-ChildProcessJob {
+    Ensure-JobObjectType
+
+    if ($script:ChildProcessJobHandle -ne [IntPtr]::Zero) {
+        return
+    }
+
+    $jobHandle = [JobObjectNative]::CreateJobObject([IntPtr]::Zero, "ReCurr-GUI-$PID")
+    if ($jobHandle -eq [IntPtr]::Zero) {
+        throw "Failed to create process job object."
+    }
+
+    $info = New-Object "JobObjectNative+JOBOBJECT_EXTENDED_LIMIT_INFORMATION"
+    $info.BasicLimitInformation.LimitFlags = [JobObjectNative]::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+
+    $infoSize = [System.Runtime.InteropServices.Marshal]::SizeOf($info)
+    $infoPtr = [System.Runtime.InteropServices.Marshal]::AllocHGlobal($infoSize)
+    try {
+        [System.Runtime.InteropServices.Marshal]::StructureToPtr($info, $infoPtr, $false)
+        $success = [JobObjectNative]::SetInformationJobObject(
+            $jobHandle,
+            [JobObjectNative+JOBOBJECTINFOCLASS]::JobObjectExtendedLimitInformation,
+            $infoPtr,
+            [uint32]$infoSize
+        )
+        if (-not $success) {
+            throw "Failed to configure process job object."
+        }
+    }
+    finally {
+        [System.Runtime.InteropServices.Marshal]::FreeHGlobal($infoPtr)
+    }
+
+    $script:ChildProcessJobHandle = $jobHandle
+}
 
 function Assert-WorkspaceLayout {
     param(
@@ -108,6 +223,81 @@ function Quote-CmdArgument {
     return '"' + $Value.Replace('"', '""') + '"'
 }
 
+function Start-HiddenTrackedProcess {
+    param(
+        [string]$WorkingDirectory,
+        [string]$CommandLine,
+        [string]$Name
+    )
+
+    Initialize-ChildProcessJob
+
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = "cmd.exe"
+    $startInfo.Arguments = "/d /c $CommandLine"
+    $startInfo.WorkingDirectory = $WorkingDirectory
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    if ($null -eq $process) {
+        throw "Failed to start $Name process."
+    }
+
+    $assigned = [JobObjectNative]::AssignProcessToJobObject($script:ChildProcessJobHandle, $process.Handle)
+    if (-not $assigned) {
+        try {
+            if (-not $process.HasExited) {
+                $process.Kill()
+            }
+        }
+        catch {
+        }
+
+        throw "Failed to assign $Name process to controller job object."
+    }
+
+    $script:TrackedProcesses += [PSCustomObject]@{
+        Name    = $Name
+        Process = $process
+    }
+
+    return $process
+}
+
+function Stop-TrackedProcesses {
+    if ($script:CleanupPerformed) {
+        return
+    }
+
+    $script:CleanupPerformed = $true
+
+    foreach ($tracked in $script:TrackedProcesses) {
+        $process = $tracked.Process
+        if ($null -eq $process) {
+            continue
+        }
+
+        try {
+            if (-not $process.HasExited) {
+                Write-Host "Stopping $($tracked.Name) process $($process.Id)"
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
+        }
+        finally {
+            $process.Dispose()
+        }
+    }
+
+    $script:TrackedProcesses = @()
+
+    if ($script:ChildProcessJobHandle -ne [IntPtr]::Zero) {
+        [JobObjectNative]::CloseHandle($script:ChildProcessJobHandle) | Out-Null
+        $script:ChildProcessJobHandle = [IntPtr]::Zero
+    }
+}
+
 try {
     if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) {
         $scriptPath = $MyInvocation.MyCommand.Path
@@ -180,20 +370,38 @@ try {
         exit 0
     }
 
-    Start-Process -FilePath "cmd.exe" `
-        -ArgumentList @("/c", $backendStartCommand) `
-        -WorkingDirectory $workspace | Out-Null
+    $backendProcess = Start-HiddenTrackedProcess `
+        -WorkingDirectory $workspace `
+        -CommandLine $backendStartCommand `
+        -Name "backend"
 
-    Start-Process -FilePath "cmd.exe" `
-        -ArgumentList @("/c", $frontendStartCommand) `
-        -WorkingDirectory $webRoot | Out-Null
+    $frontendProcess = Start-HiddenTrackedProcess `
+        -WorkingDirectory $webRoot `
+        -CommandLine $frontendStartCommand `
+        -Name "frontend"
 
     Wait-Http200 -Url $backendHealthUrl -TimeoutSeconds $HealthTimeoutSeconds
     Wait-Http200 -Url $frontendHealthUrl -TimeoutSeconds $HealthTimeoutSeconds
 
     Write-Host "GUI local development stack is ready."
+    Write-Host "Controller window is active. Close this window or press Ctrl+C to stop backend and frontend."
+    Write-Host "Backend PID: $($backendProcess.Id)"
+    Write-Host "Frontend PID: $($frontendProcess.Id)"
+
+    while ($true) {
+        foreach ($tracked in $script:TrackedProcesses) {
+            if ($tracked.Process.HasExited) {
+                throw "$($tracked.Name) process exited unexpectedly. Check its log file for details."
+            }
+        }
+
+        Start-Sleep -Seconds 2
+    }
 }
 catch {
     Write-Error $_
     exit 1
+}
+finally {
+    Stop-TrackedProcesses
 }
