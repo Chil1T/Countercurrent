@@ -15,7 +15,13 @@ from .blueprint import match_chapter_for_transcript, save_blueprint
 from .bootstrap import bootstrap_course_blueprint
 from .chapter_execution import ChapterExecutionPlanner, ChapterExecutionScheduler, ChapterWorker, RuntimeStateMutationGuard
 from .llm import LLMBackend
-from .provider_policy import ProviderExecutionPolicy, ProviderPermitRegistry, get_builtin_provider_policy
+from .provider_policy import (
+    ProviderExecutionPolicy,
+    ProviderPermitRegistry,
+    get_builtin_provider_policy,
+    get_provider_coordination_root,
+    get_service_coordination_root,
+)
 
 REQUIRED_PACK_FILES = (
     "01-精讲.md",
@@ -79,8 +85,8 @@ T = TypeVar("T")
 
 
 @contextmanager
-def _acquire_course_run_slot(*, output_dir: Path, course_id: str):
-    lock_dir = output_dir / "runtime" / "course_run_locks" / course_id
+def _acquire_course_run_slot(*, coordination_root: Path, course_id: str):
+    lock_dir = coordination_root / course_id
     lock_dir.parent.mkdir(parents=True, exist_ok=True)
     try:
         lock_dir.mkdir(parents=False, exist_ok=False)
@@ -104,7 +110,11 @@ def _acquire_course_run_slot(*, output_dir: Path, course_id: str):
 
 
 def reset_pipeline_runtime_registries() -> None:
-    return None
+    shutil.rmtree(_course_run_lock_root(), ignore_errors=True)
+
+
+def _course_run_lock_root() -> Path:
+    return get_service_coordination_root() / "course_run_locks"
 
 
 @dataclass
@@ -273,9 +283,8 @@ class PipelineRunner:
         self.ingest_agent = IngestAgent()
         self.pack_writer_files = PACK_WRITER_FILES
         self.provider_policy = self.config.provider_policy or get_builtin_provider_policy(self.config.backend_name)
-        self.provider_permit_registry = ProviderPermitRegistry(
-            root_dir=self.config.output_dir / "runtime" / "provider_permits"
-        )
+        self.service_coordination_root = get_service_coordination_root()
+        self.provider_permit_registry = ProviderPermitRegistry(root_dir=get_provider_coordination_root())
         self.course_blueprint = self.config.course_blueprint or bootstrap_course_blueprint(
             input_dir=self.config.input_dir,
             book_title=self.config.input_dir.name or "未命名课程",
@@ -310,7 +319,7 @@ class PipelineRunner:
 
     def run(self) -> None:
         with _acquire_course_run_slot(
-            output_dir=self.config.output_dir,
+            coordination_root=self.service_coordination_root / "course_run_locks",
             course_id=self.course_blueprint["course_id"],
         ):
             if self.config.clean_output and self.course_dir.exists():

@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import threading
 import time
@@ -474,7 +475,9 @@ class PipelineRunnerTest(unittest.TestCase):
     def test_provider_global_permit_caps_total_hosted_calls_across_runs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            output_dir = root / "out"
+            self._use_shared_coordination_root(root / "coordination")
+            output_dir_a = root / "out-a"
+            output_dir_b = root / "out-b"
             shared_probe = ConcurrentStageProbe()
             policy = ProviderExecutionPolicy(
                 provider="stub",
@@ -488,7 +491,7 @@ class PipelineRunnerTest(unittest.TestCase):
             runner_a = self._make_runner_with_tracking_backend(
                 root=root,
                 course_name="数据库系统概论-A",
-                output_dir=output_dir,
+                output_dir=output_dir_a,
                 probe=shared_probe,
                 provider_name="stub",
                 policy=policy,
@@ -496,7 +499,7 @@ class PipelineRunnerTest(unittest.TestCase):
             runner_b = self._make_runner_with_tracking_backend(
                 root=root,
                 course_name="数据库系统概论-B",
-                output_dir=output_dir,
+                output_dir=output_dir_b,
                 probe=shared_probe,
                 provider_name="stub",
                 policy=policy,
@@ -505,9 +508,6 @@ class PipelineRunnerTest(unittest.TestCase):
             errors: list[Exception] = []
             thread_a = self._start_runner_thread(runner_a, errors)
             self.assertTrue(shared_probe.entered.wait(timeout=2))
-            reset_provider_registry = getattr(provider_policy_module, "reset_provider_permit_registry", None)
-            if callable(reset_provider_registry):
-                reset_provider_registry()
             thread_b = self._start_runner_thread(runner_b, errors)
             thread_a.join(timeout=5)
             thread_b.join(timeout=5)
@@ -563,7 +563,9 @@ class PipelineRunnerTest(unittest.TestCase):
     def test_same_course_id_rejects_multiple_active_runs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            output_dir = root / "out"
+            self._use_shared_coordination_root(root / "coordination")
+            output_dir_a = root / "out-a"
+            output_dir_b = root / "out-b"
             probe = ConcurrentStageProbe()
             policy = ProviderExecutionPolicy(
                 provider="stub",
@@ -576,7 +578,7 @@ class PipelineRunnerTest(unittest.TestCase):
             runner_a = self._make_runner_with_tracking_backend(
                 root=root,
                 course_name="数据库系统概论-冲突课程",
-                output_dir=output_dir,
+                output_dir=output_dir_a,
                 probe=probe,
                 provider_name="stub",
                 policy=policy,
@@ -585,7 +587,7 @@ class PipelineRunnerTest(unittest.TestCase):
             runner_b = self._make_runner_with_tracking_backend(
                 root=root,
                 course_name="数据库系统概论-冲突课程",
-                output_dir=output_dir,
+                output_dir=output_dir_b,
                 probe=ConcurrentStageProbe(),
                 provider_name="stub",
                 policy=policy,
@@ -594,9 +596,6 @@ class PipelineRunnerTest(unittest.TestCase):
             errors: list[Exception] = []
             thread_a = self._start_runner_thread(runner_a, errors)
             self.assertTrue(probe.entered.wait(timeout=2))
-            reset_runtime_registries = getattr(pipeline_module, "reset_pipeline_runtime_registries", None)
-            if callable(reset_runtime_registries):
-                reset_runtime_registries()
 
             second_errors: list[Exception] = []
             thread_b = self._start_runner_thread(runner_b, second_errors)
@@ -1023,6 +1022,24 @@ class PipelineRunnerTest(unittest.TestCase):
         thread = threading.Thread(target=target)
         thread.start()
         return thread
+
+    def _use_shared_coordination_root(self, coordination_root: Path) -> None:
+        original = os.environ.get("PROCESSAGENT_COORDINATION_ROOT")
+        os.environ["PROCESSAGENT_COORDINATION_ROOT"] = str(coordination_root)
+
+        def restore() -> None:
+            if original is None:
+                os.environ.pop("PROCESSAGENT_COORDINATION_ROOT", None)
+            else:
+                os.environ["PROCESSAGENT_COORDINATION_ROOT"] = original
+
+        self.addCleanup(restore)
+        reset_provider_registry = getattr(provider_policy_module, "reset_provider_permit_registry", None)
+        if callable(reset_provider_registry):
+            reset_provider_registry()
+        reset_runtime_registries = getattr(pipeline_module, "reset_pipeline_runtime_registries", None)
+        if callable(reset_runtime_registries):
+            reset_runtime_registries()
 
     def _chapter_dir(self, output_dir: Path, blueprint: dict) -> Path:
         return output_dir / "courses" / blueprint["course_id"] / "chapters" / "第一章·绪论"

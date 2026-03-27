@@ -17,6 +17,8 @@ POLICY_OVERRIDE_FIELDS = (
     "max_call_attempts",
     "max_resume_attempts",
 )
+COORDINATION_ROOT_ENV_VAR = "PROCESSAGENT_COORDINATION_ROOT"
+DEFAULT_COORDINATION_DIRNAME = ".processagent-runtime"
 
 
 @dataclass(frozen=True)
@@ -164,9 +166,18 @@ def get_provider_active_permits(provider: str, *, coordination_root: Path) -> in
 
 
 def reset_provider_permit_registry(*, coordination_root: Path | None = None) -> None:
-    if coordination_root is None:
-        return
-    ProviderPermitRegistry(root_dir=coordination_root).reset()
+    ProviderPermitRegistry(root_dir=coordination_root or get_provider_coordination_root()).reset()
+
+
+def get_service_coordination_root() -> Path:
+    configured_root = os.environ.get(COORDINATION_ROOT_ENV_VAR)
+    if configured_root:
+        return Path(configured_root).expanduser().resolve()
+    return Path(__file__).resolve().parent.parent / DEFAULT_COORDINATION_DIRNAME
+
+
+def get_provider_coordination_root() -> Path:
+    return get_service_coordination_root() / "provider_permits"
 
 
 def get_builtin_provider_policy(provider: str) -> ProviderExecutionPolicy:
