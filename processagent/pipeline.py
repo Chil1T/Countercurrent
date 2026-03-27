@@ -11,6 +11,7 @@ from typing import Any
 
 from .blueprint import match_chapter_for_transcript, save_blueprint
 from .bootstrap import bootstrap_course_blueprint
+from .chapter_execution import ChapterExecutionPlanner, ChapterWorker, RuntimeStateMutationGuard
 from .llm import LLMBackend
 from .provider_policy import ProviderExecutionPolicy
 
@@ -152,6 +153,7 @@ class PipelineRunner:
             self.llm_backend = HeuristicLLMBackend()
         self.prompt_dir = Path(__file__).with_name("prompts")
         self.ingest_agent = IngestAgent()
+        self.pack_writer_files = PACK_WRITER_FILES
         self.course_blueprint = self.config.course_blueprint or bootstrap_course_blueprint(
             input_dir=self.config.input_dir,
             book_title=self.config.input_dir.name or "未命名课程",
@@ -163,11 +165,21 @@ class PipelineRunner:
         self.blueprint_path = self.course_dir / "course_blueprint.json"
         self.llm_call_log_path = self.course_dir / "runtime" / "llm_calls.jsonl"
         self.runtime_state = self._load_runtime_state()
+        self.runtime_state_guard = RuntimeStateMutationGuard(
+            runtime_state_path=self.runtime_state_path,
+            runtime_state=self.runtime_state,
+            blueprint_hash=self.course_blueprint["blueprint_hash"],
+            now_iso_factory=self._now_iso,
+            pipeline_signature=PIPELINE_SIGNATURE,
+        )
+        self.chapter_planner = ChapterExecutionPlanner(runner=self, runtime_state_guard=self.runtime_state_guard)
+        self.chapter_worker = ChapterWorker(runner=self, runtime_state_guard=self.runtime_state_guard)
 
     def run(self) -> None:
         if self.config.clean_output and self.course_dir.exists():
             shutil.rmtree(self.course_dir)
-            self.runtime_state = self._fresh_runtime_state()
+            self.runtime_state.clear()
+            self.runtime_state.update(self._fresh_runtime_state())
 
         self.course_dir.mkdir(parents=True, exist_ok=True)
         save_blueprint(self.blueprint_path, self.course_blueprint)
@@ -180,144 +192,11 @@ class PipelineRunner:
 
         for transcript_file in sorted(self.config.input_dir.glob("*.md")):
             chapter_blueprint = match_chapter_for_transcript(self.course_blueprint, transcript_file.stem)
-            chapter_output_id = chapter_blueprint["chapter_id"]
-            chapter_dir = self.course_dir / "chapters" / chapter_output_id
-            intermediate_dir = chapter_dir / "intermediate"
-            notebooklm_dir = chapter_dir / "notebooklm"
-            intermediate_dir.mkdir(parents=True, exist_ok=True)
-            notebooklm_dir.mkdir(parents=True, exist_ok=True)
-            chapter_changed = False
-
-            normalized = self._load_step_json(
-                chapter_id=chapter_output_id,
-                step_name="ingest",
-                path=intermediate_dir / "normalized_transcript.json",
-                require_blueprint=False,
-            )
-            if normalized is None:
-                normalized = self.ingest_agent.run(
-                    chapter_id=chapter_output_id,
-                    transcript_text=transcript_file.read_text(encoding="utf-8"),
-                )
-                self._write_json(intermediate_dir / "normalized_transcript.json", normalized)
-                self._mark_step_complete(chapter_output_id, "ingest", require_blueprint=False)
-                chapter_changed = True
-
-            topic_map = self._load_step_json(
-                chapter_id=chapter_output_id,
-                step_name="curriculum_anchor",
-                path=intermediate_dir / "topic_anchor_map.json",
-            )
-            if topic_map is None:
-                topic_map = self._run_agent(
-                    "curriculum_anchor",
-                    {
-                        "course_blueprint": self._slim_course_blueprint(),
-                        "chapter_blueprint": chapter_blueprint,
-                        "normalized_transcript": normalized,
-                    },
-                    scope=chapter_output_id,
-                )
-                self._write_json(intermediate_dir / "topic_anchor_map.json", topic_map)
-                self._mark_step_complete(chapter_output_id, "curriculum_anchor")
-                chapter_changed = True
-
-            augmentation = self._load_step_json(
-                chapter_id=chapter_output_id,
-                step_name="gap_fill",
-                path=intermediate_dir / "augmentation_candidates.json",
-            )
-            if augmentation is None:
-                augmentation = self._run_agent(
-                    "gap_fill",
-                    {
-                        "course_blueprint": self._slim_course_blueprint(),
-                        "chapter_blueprint": chapter_blueprint,
-                        "normalized_transcript": normalized,
-                        "topic_anchor_map": topic_map,
-                    },
-                    scope=chapter_output_id,
-                )
-                self._write_json(intermediate_dir / "augmentation_candidates.json", augmentation)
-                self._mark_step_complete(chapter_output_id, "gap_fill")
-                chapter_changed = True
-
-            pack_payload = self._build_pack_payload(
+            plan = self.chapter_planner.plan(
+                transcript_file=transcript_file,
                 chapter_blueprint=chapter_blueprint,
-                normalized=normalized,
-                topic_map=topic_map,
-                augmentation=augmentation,
             )
-            pack_plan_path = intermediate_dir / "pack_plan.json"
-            pack_plan = None if chapter_changed else self._load_step_json(
-                chapter_id=chapter_output_id,
-                step_name="pack_plan",
-                path=pack_plan_path,
-            )
-            if pack_plan is None:
-                pack_plan = self._run_agent(
-                    "pack_plan",
-                    pack_payload,
-                    scope=chapter_output_id,
-                )
-                self._write_json(pack_plan_path, pack_plan)
-                self._mark_step_complete(chapter_output_id, "pack_plan")
-                chapter_changed = True
-
-            pack_files: dict[str, str] = {}
-            for writer_name in self._active_writer_names():
-                file_name = PACK_WRITER_FILES[writer_name]
-                output_path = notebooklm_dir / file_name
-                content = None if chapter_changed else self._load_step_text(
-                    chapter_id=chapter_output_id,
-                    step_name=writer_name,
-                    path=output_path,
-                )
-                if content is None:
-                    content = self._run_text_agent(
-                        writer_name,
-                        self._build_writer_payload(
-                            chapter_blueprint=chapter_blueprint,
-                            normalized=normalized,
-                            topic_map=topic_map,
-                            augmentation=augmentation,
-                            pack_plan=pack_plan,
-                        ),
-                        scope=chapter_output_id,
-                    )
-                    output_path.write_text(content, encoding="utf-8")
-                    self._mark_step_complete(chapter_output_id, writer_name)
-                    chapter_changed = True
-                pack_files[file_name] = content
-
-            pack = {"files": pack_files}
-
-            review_path = chapter_dir / "review_report.json"
-            if self.config.enable_review:
-                review = self._load_step_json(
-                    chapter_id=chapter_output_id,
-                    step_name="review",
-                    path=review_path,
-                ) if not chapter_changed else None
-                if review is None:
-                    review = self._run_agent(
-                        "review",
-                        self._build_review_payload(
-                            chapter_blueprint=chapter_blueprint,
-                            normalized=normalized,
-                            topic_map=topic_map,
-                            augmentation=augmentation,
-                            pack=pack,
-                        ),
-                        scope=chapter_output_id,
-                    )
-                    self._write_json(review_path, review)
-                    self._mark_step_complete(chapter_output_id, "review")
-                    chapter_changed = True
-            else:
-                if review_path.exists():
-                    review_path.unlink()
-                self._clear_step_record(chapter_output_id, "review")
+            self.chapter_worker.run(plan)
 
         self._persist_runtime_state()
 
@@ -601,14 +480,12 @@ class PipelineRunner:
         path: Path,
         require_blueprint: bool = True,
     ) -> dict[str, Any] | None:
-        if not self._step_is_valid(
-            scope=chapter_id,
+        return self.runtime_state_guard.load_step_json(
+            chapter_id=chapter_id,
             step_name=step_name,
-            required_paths=(path,),
+            path=path,
             require_blueprint=require_blueprint,
-        ):
-            return None
-        return json.loads(path.read_text(encoding="utf-8"))
+        )
 
     def _load_step_text(
         self,
@@ -618,14 +495,12 @@ class PipelineRunner:
         path: Path,
         require_blueprint: bool = True,
     ) -> str | None:
-        if not self._step_is_valid(
-            scope=chapter_id,
+        return self.runtime_state_guard.load_step_text(
+            chapter_id=chapter_id,
             step_name=step_name,
-            required_paths=(path,),
+            path=path,
             require_blueprint=require_blueprint,
-        ):
-            return None
-        return path.read_text(encoding="utf-8")
+        )
 
     def _load_step_pack(self, *, chapter_id: str, step_name: str, notebooklm_dir: Path) -> dict[str, Any] | None:
         required_paths = tuple(notebooklm_dir / name for name in REQUIRED_PACK_FILES)
@@ -647,44 +522,25 @@ class PipelineRunner:
         required_paths: tuple[Path, ...],
         require_blueprint: bool,
     ) -> bool:
-        record = self._get_step_record(scope, step_name)
-        if record is None:
-            return False
-        if not all(path.exists() for path in required_paths):
-            return False
-        if record.get("pipeline_signature") != PIPELINE_SIGNATURE:
-            return False
-        if require_blueprint and record.get("blueprint_hash") != self.course_blueprint["blueprint_hash"]:
-            return False
-        return record.get("status") == "completed"
+        return self.runtime_state_guard.step_is_valid(
+            scope=scope,
+            step_name=step_name,
+            required_paths=required_paths,
+            require_blueprint=require_blueprint,
+        )
 
     def _get_step_record(self, scope: str, step_name: str) -> dict[str, Any] | None:
-        if scope == "global":
-            return self.runtime_state.get("global", {}).get(step_name)
-        return self.runtime_state.get("chapters", {}).get(scope, {}).get("steps", {}).get(step_name)
+        return self.runtime_state_guard.get_step_record(scope, step_name)
 
     def _clear_step_record(self, scope: str, step_name: str) -> None:
-        if scope == "global":
-            self.runtime_state.get("global", {}).pop(step_name, None)
-        else:
-            chapter_state = self.runtime_state.get("chapters", {}).get(scope, {})
-            chapter_state.get("steps", {}).pop(step_name, None)
-        self._persist_runtime_state()
+        self.runtime_state_guard.clear_step_record(scope, step_name)
 
     def _mark_step_complete(self, scope: str, step_name: str, require_blueprint: bool = True) -> None:
-        payload = {
-            "status": "completed",
-            "updated_at": self._now_iso(),
-            "blueprint_hash": self.course_blueprint["blueprint_hash"] if require_blueprint else None,
-            "pipeline_signature": PIPELINE_SIGNATURE,
-        }
-        if scope == "global":
-            self.runtime_state.setdefault("global", {})[step_name] = payload
-        else:
-            chapter_state = self.runtime_state.setdefault("chapters", {}).setdefault(scope, {"steps": {}})
-            chapter_state.setdefault("steps", {})[step_name] = payload
-        self.runtime_state["last_error"] = None
-        self._persist_runtime_state()
+        self.runtime_state_guard.mark_step_complete(
+            scope,
+            step_name,
+            require_blueprint=require_blueprint,
+        )
 
     def _current_run_identity(self) -> dict[str, Any]:
         return {
@@ -735,11 +591,7 @@ class PipelineRunner:
         }
 
     def _persist_runtime_state(self) -> None:
-        self.runtime_state_path.parent.mkdir(parents=True, exist_ok=True)
-        self.runtime_state_path.write_text(
-            json.dumps(self.runtime_state, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        self.runtime_state_guard.persist()
 
     def _record_llm_call(
         self,

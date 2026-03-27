@@ -8,7 +8,12 @@ from processagent.pipeline import EXECUTION_STRATEGY, HOSTED_PRESSURE_STAGES, PI
 from processagent.testing import StubLLMBackend
 
 
-def make_blueprint(*, review_mode: str = "light", target_output: str = "interview_knowledge_base") -> dict:
+def make_blueprint(
+    *,
+    chapters: list[dict] | None = None,
+    review_mode: str = "light",
+    target_output: str = "interview_knowledge_base",
+) -> dict:
     return finalize_blueprint(
         {
             "course_name": "数据库系统概论",
@@ -20,7 +25,7 @@ def make_blueprint(*, review_mode: str = "light", target_output: str = "intervie
                 "publisher": "高等教育出版社",
                 "isbn": "",
             },
-            "chapters": [
+            "chapters": chapters or [
                 {
                     "chapter_id": "第一章·绪论",
                     "title": "绪论",
@@ -39,6 +44,15 @@ def make_blueprint(*, review_mode: str = "light", target_output: str = "intervie
             },
         }
     )
+
+
+def make_step_record(blueprint_hash: str | None) -> dict:
+    return {
+        "status": "completed",
+        "updated_at": "t",
+        "blueprint_hash": blueprint_hash,
+        "pipeline_signature": PIPELINE_SIGNATURE,
+    }
 
 
 class PipelineRunnerTest(unittest.TestCase):
@@ -90,6 +104,220 @@ class PipelineRunnerTest(unittest.TestCase):
             chapter_dir = self._chapter_dir(output_dir, blueprint)
             self.assertTrue((chapter_dir / "notebooklm" / "01-精讲.md").exists())
             self.assertTrue((chapter_dir / "notebooklm" / "05-疑点与待核.md").exists())
+
+    def test_chapter_worker_runs_single_chapter_stages_in_serial_order(self) -> None:
+        from processagent.chapter_execution import ChapterExecutionPlanner, ChapterWorker, RuntimeStateMutationGuard
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "captions"
+            output_dir = root / "out"
+            blueprint = make_blueprint(target_output="standard_knowledge_pack")
+            input_dir.mkdir()
+            transcript_file = input_dir / "第一章·绪论.md"
+            transcript_file.write_text(
+                "数据库系统由数据库、硬件、软件和人员组成。三层模式两级映像是重点。",
+                encoding="utf-8",
+            )
+            backend = StubLLMBackend(
+                responses={
+                    "curriculum_anchor": {"chapter_summary": "锚点", "anchors": []},
+                    "gap_fill": {"candidates": []},
+                    "compose_pack": {
+                        "files": {
+                            "01-精讲.md": "# 精讲\n",
+                            "02-术语与定义.md": "# 术语\n",
+                            "03-面试问答.md": "# 面试问答\n",
+                            "04-跨章关联.md": "# 跨章关联\n",
+                            "05-疑点与待核.md": "# 疑点与待核\n",
+                        }
+                    },
+                }
+            )
+            runner = PipelineRunner(
+                config=PipelineConfig(input_dir=input_dir, output_dir=output_dir, course_blueprint=blueprint),
+                llm_backend=backend,
+            )
+            runner.course_dir.mkdir(parents=True, exist_ok=True)
+            runner._persist_runtime_state()
+
+            guard = RuntimeStateMutationGuard(
+                runtime_state_path=runner.runtime_state_path,
+                runtime_state=runner.runtime_state,
+                blueprint_hash=blueprint["blueprint_hash"],
+                now_iso_factory=runner._now_iso,
+            )
+            planner = ChapterExecutionPlanner(runner=runner, runtime_state_guard=guard)
+            chapter_blueprint = runner.course_blueprint["chapters"][0]
+            plan = planner.plan(transcript_file=transcript_file, chapter_blueprint=chapter_blueprint)
+
+            ChapterWorker(runner=runner, runtime_state_guard=guard).run(plan)
+
+            self.assertEqual(
+                [item["agent_name"] for item in backend.calls or []],
+                [
+                    "curriculum_anchor",
+                    "gap_fill",
+                    "pack_plan",
+                    "write_lecture_note",
+                    "write_terms",
+                    "write_interview_qa",
+                    "write_cross_links",
+                    "write_open_questions",
+                ],
+            )
+
+    def test_chapter_execution_planner_skips_completed_steps_for_same_chapter(self) -> None:
+        from processagent.chapter_execution import ChapterExecutionPlanner, RuntimeStateMutationGuard
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "captions"
+            output_dir = root / "out"
+            blueprint = make_blueprint(target_output="standard_knowledge_pack")
+            course_dir = output_dir / "courses" / blueprint["course_id"]
+            chapter_dir = self._chapter_dir(output_dir, blueprint)
+            intermediate_dir = chapter_dir / "intermediate"
+            input_dir.mkdir()
+            intermediate_dir.mkdir(parents=True)
+
+            transcript_file = input_dir / "第一章·绪论.md"
+            transcript_file.write_text("数据库系统由数据库、硬件、软件和人员组成。", encoding="utf-8")
+            (intermediate_dir / "normalized_transcript.json").write_text(
+                json.dumps(
+                    {
+                        "chapter_id": "第一章·绪论",
+                        "chunks": [
+                            {
+                                "chunk_id": "chunk-001",
+                                "raw_text": "raw",
+                                "clean_text": "数据库系统由数据库、硬件、软件和人员组成。",
+                                "speaker_role": "lecturer",
+                                "noise_flags": [],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (intermediate_dir / "topic_anchor_map.json").write_text(
+                json.dumps({"chapter_summary": "锚点", "anchors": []}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            (intermediate_dir / "augmentation_candidates.json").write_text(
+                json.dumps({"candidates": []}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+            runtime_state = {
+                "course_id": blueprint["course_id"],
+                "blueprint_hash": blueprint["blueprint_hash"],
+                "provider": "stub",
+                "default_model": "",
+                "stage_models": {},
+                "pipeline_signature": PIPELINE_SIGNATURE,
+                "review_enabled": False,
+                "review_mode": blueprint["policy"]["review_mode"],
+                "target_output": blueprint["policy"]["target_output"],
+                "run_identity": {
+                    "review_enabled": False,
+                    "review_mode": blueprint["policy"]["review_mode"],
+                    "target_output": blueprint["policy"]["target_output"],
+                },
+                "chapters": {
+                    "第一章·绪论": {
+                        "steps": {
+                            "ingest": make_step_record(None),
+                            "curriculum_anchor": make_step_record(blueprint["blueprint_hash"]),
+                            "gap_fill": make_step_record(blueprint["blueprint_hash"]),
+                        }
+                    }
+                },
+                "global": {},
+                "last_error": None,
+            }
+            course_dir.mkdir(parents=True, exist_ok=True)
+            runtime_state_path = course_dir / "runtime_state.json"
+            runtime_state_path.write_text(json.dumps(runtime_state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            runner = PipelineRunner(
+                config=PipelineConfig(input_dir=input_dir, output_dir=output_dir, course_blueprint=blueprint),
+                llm_backend=StubLLMBackend(responses={}),
+            )
+            guard = RuntimeStateMutationGuard(
+                runtime_state_path=runtime_state_path,
+                runtime_state=runner.runtime_state,
+                blueprint_hash=blueprint["blueprint_hash"],
+                now_iso_factory=runner._now_iso,
+            )
+            planner = ChapterExecutionPlanner(runner=runner, runtime_state_guard=guard)
+
+            plan = planner.plan(transcript_file=transcript_file, chapter_blueprint=runner.course_blueprint["chapters"][0])
+
+            self.assertEqual(
+                plan.pending_steps,
+                (
+                    "pack_plan",
+                    "write_lecture_note",
+                    "write_terms",
+                    "write_interview_qa",
+                    "write_cross_links",
+                    "write_open_questions",
+                ),
+            )
+
+    def test_runtime_state_mutation_guard_preserves_other_chapter_state(self) -> None:
+        from processagent.chapter_execution import RuntimeStateMutationGuard
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime_state_path = root / "runtime_state.json"
+            runtime_state = {
+                "course_id": "course-1",
+                "blueprint_hash": "hash-1",
+                "provider": "stub",
+                "default_model": "",
+                "stage_models": {},
+                "pipeline_signature": PIPELINE_SIGNATURE,
+                "review_enabled": False,
+                "review_mode": "light",
+                "target_output": "interview_knowledge_base",
+                "run_identity": {
+                    "review_enabled": False,
+                    "review_mode": "light",
+                    "target_output": "interview_knowledge_base",
+                },
+                "chapters": {
+                    "第一章·绪论": {"steps": {"ingest": make_step_record(None)}},
+                    "第二章·模型": {"steps": {"gap_fill": make_step_record("hash-1")}},
+                },
+                "global": {},
+                "last_error": {"scope": "第一章·绪论", "step": "gap_fill"},
+            }
+            runtime_state_path.write_text(json.dumps(runtime_state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            guard = RuntimeStateMutationGuard(
+                runtime_state_path=runtime_state_path,
+                runtime_state=runtime_state,
+                blueprint_hash="hash-1",
+                now_iso_factory=lambda: "2026-03-27T00:00:00+00:00",
+            )
+
+            guard.mark_step_complete("第一章·绪论", "pack_plan")
+
+            persisted_state = json.loads(runtime_state_path.read_text(encoding="utf-8"))
+            self.assertIn("第二章·模型", persisted_state["chapters"])
+            self.assertEqual(
+                persisted_state["chapters"]["第二章·模型"]["steps"]["gap_fill"]["status"],
+                "completed",
+            )
+            self.assertEqual(
+                persisted_state["chapters"]["第一章·绪论"]["steps"]["pack_plan"]["pipeline_signature"],
+                PIPELINE_SIGNATURE,
+            )
+            self.assertIsNone(persisted_state["last_error"])
 
     def _chapter_dir(self, output_dir: Path, blueprint: dict) -> Path:
         return output_dir / "courses" / blueprint["course_id"] / "chapters" / "第一章·绪论"
