@@ -47,6 +47,53 @@ class ArtifactsApiTests(unittest.TestCase):
 
         self.client = TestClient(create_app(output_root=self.output_root))
 
+    def _write_runtime_state(
+        self,
+        *,
+        review_enabled: bool,
+        chapters: dict[str, dict[str, object]],
+        target_output: str = "interview_knowledge_base",
+    ) -> None:
+        course_dir = self.output_root / "courses" / self.course_id
+        (course_dir / "course_blueprint.json").write_text(
+            json.dumps(
+                {
+                    "course_id": self.course_id,
+                    "chapters": [
+                        {"chapter_id": chapter_id, "title": chapter_id}
+                        for chapter_id in chapters
+                    ],
+                    "policy": {
+                        "target_output": target_output,
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        (course_dir / "runtime_state.json").write_text(
+            json.dumps(
+                {
+                    "course_id": self.course_id,
+                    "run_identity": {
+                        "review_enabled": review_enabled,
+                        "target_output": target_output,
+                    },
+                    "chapters": chapters,
+                    "last_error": None,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _archive_names(response) -> list[str]:
+        archive = zipfile.ZipFile(io.BytesIO(response.content))
+        return sorted(archive.namelist())
+
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
@@ -162,3 +209,149 @@ class ArtifactsApiTests(unittest.TestCase):
         self.assertIn("filename*=UTF-8''", content_disposition)
         archive = zipfile.ZipFile(io.BytesIO(response.content))
         self.assertIn(f"{unicode_course_id}/course_blueprint.json", archive.namelist())
+
+    def test_export_zip_completed_chapters_only_uses_strict_export_ready_semantics(self) -> None:
+        course_dir = self.output_root / "courses" / self.course_id
+        (course_dir / "chapters" / "chapter-01" / "intermediate").mkdir(parents=True, exist_ok=True)
+        (course_dir / "chapters" / "chapter-02" / "notebooklm").mkdir(parents=True, exist_ok=True)
+        (course_dir / "chapters" / "chapter-02" / "intermediate").mkdir(parents=True, exist_ok=True)
+        (course_dir / "chapters" / "chapter-01" / "intermediate" / "pack_plan.json").write_text(
+            json.dumps({"status": "completed"}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (course_dir / "chapters" / "chapter-02" / "notebooklm" / "02-精讲.md").write_text(
+            "# Chapter 02\n\nPartial output.",
+            encoding="utf-8",
+        )
+        (course_dir / "chapters" / "chapter-02" / "intermediate" / "pack_plan.json").write_text(
+            json.dumps({"status": "partial"}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self._write_runtime_state(
+            review_enabled=True,
+            chapters={
+                "chapter-01": {
+                    "steps": {
+                        "ingest": {"status": "completed"},
+                        "curriculum_anchor": {"status": "completed"},
+                        "gap_fill": {"status": "completed"},
+                        "pack_plan": {"status": "completed"},
+                        "write_lecture_note": {"status": "completed"},
+                        "write_terms": {"status": "completed"},
+                        "write_interview_qa": {"status": "completed"},
+                        "write_cross_links": {"status": "completed"},
+                        "review": {"status": "completed"},
+                    }
+                },
+                "chapter-02": {
+                    "steps": {
+                        "ingest": {"status": "completed"},
+                        "curriculum_anchor": {"status": "completed"},
+                        "gap_fill": {"status": "completed"},
+                        "pack_plan": {"status": "completed"},
+                        "write_lecture_note": {"status": "completed"},
+                        "write_terms": {"status": "completed"},
+                        "write_interview_qa": {"status": "completed"},
+                        "write_cross_links": {"status": "completed"},
+                    }
+                },
+            },
+        )
+
+        response = self.client.get(
+            f"/courses/{self.course_id}/export",
+            params={"completed_chapters_only": "true"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        archive_names = self._archive_names(response)
+        self.assertIn(f"{self.course_id}/course_blueprint.json", archive_names)
+        self.assertIn(f"{self.course_id}/chapters/chapter-01/notebooklm/01-精讲.md", archive_names)
+        self.assertIn(f"{self.course_id}/chapters/chapter-01/intermediate/pack_plan.json", archive_names)
+        self.assertNotIn(f"{self.course_id}/chapters/chapter-02/notebooklm/02-精讲.md", archive_names)
+        self.assertNotIn(f"{self.course_id}/chapters/chapter-02/intermediate/pack_plan.json", archive_names)
+
+    def test_export_zip_final_outputs_only_limits_archive_to_notebooklm_outputs(self) -> None:
+        course_dir = self.output_root / "courses" / self.course_id
+        (course_dir / "chapters" / "chapter-01" / "intermediate").mkdir(parents=True, exist_ok=True)
+        (course_dir / "chapters" / "chapter-02" / "notebooklm").mkdir(parents=True, exist_ok=True)
+        (course_dir / "chapters" / "chapter-02" / "intermediate").mkdir(parents=True, exist_ok=True)
+        (course_dir / "chapters" / "chapter-01" / "intermediate" / "pack_plan.json").write_text(
+            json.dumps({"status": "completed"}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (course_dir / "chapters" / "chapter-02" / "notebooklm" / "02-精讲.md").write_text(
+            "# Chapter 02\n\nPartial output.",
+            encoding="utf-8",
+        )
+        (course_dir / "chapters" / "chapter-02" / "intermediate" / "pack_plan.json").write_text(
+            json.dumps({"status": "partial"}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        response = self.client.get(
+            f"/courses/{self.course_id}/export",
+            params={"final_outputs_only": "true"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        archive_names = self._archive_names(response)
+        self.assertEqual(
+            archive_names,
+            [
+                f"{self.course_id}/chapters/chapter-01/notebooklm/01-精讲.md",
+                f"{self.course_id}/chapters/chapter-02/notebooklm/02-精讲.md",
+            ],
+        )
+
+    def test_export_zip_combines_completed_chapter_and_final_output_filters(self) -> None:
+        course_dir = self.output_root / "courses" / self.course_id
+        (course_dir / "chapters" / "chapter-02" / "notebooklm").mkdir(parents=True, exist_ok=True)
+        (course_dir / "chapters" / "chapter-02" / "notebooklm" / "02-精讲.md").write_text(
+            "# Chapter 02\n\nPartial output.",
+            encoding="utf-8",
+        )
+        self._write_runtime_state(
+            review_enabled=True,
+            chapters={
+                "chapter-01": {
+                    "steps": {
+                        "ingest": {"status": "completed"},
+                        "curriculum_anchor": {"status": "completed"},
+                        "gap_fill": {"status": "completed"},
+                        "pack_plan": {"status": "completed"},
+                        "write_lecture_note": {"status": "completed"},
+                        "write_terms": {"status": "completed"},
+                        "write_interview_qa": {"status": "completed"},
+                        "write_cross_links": {"status": "completed"},
+                        "review": {"status": "completed"},
+                    }
+                },
+                "chapter-02": {
+                    "steps": {
+                        "ingest": {"status": "completed"},
+                        "curriculum_anchor": {"status": "completed"},
+                        "gap_fill": {"status": "completed"},
+                        "pack_plan": {"status": "completed"},
+                        "write_lecture_note": {"status": "completed"},
+                        "write_terms": {"status": "completed"},
+                        "write_interview_qa": {"status": "completed"},
+                        "write_cross_links": {"status": "completed"},
+                    }
+                },
+            },
+        )
+
+        response = self.client.get(
+            f"/courses/{self.course_id}/export",
+            params={
+                "completed_chapters_only": "true",
+                "final_outputs_only": "true",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            self._archive_names(response),
+            [f"{self.course_id}/chapters/chapter-01/notebooklm/01-精讲.md"],
+        )

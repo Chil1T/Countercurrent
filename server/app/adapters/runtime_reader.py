@@ -23,6 +23,17 @@ OPTIONAL_CHAPTER_STEPS = (
 )
 
 
+def resolve_required_chapter_steps(target_output: str | None, review_enabled: bool) -> tuple[str, ...]:
+    writer_steps = WRITER_STAGE_SETS.get(
+        target_output or "interview_knowledge_base",
+        WRITER_STAGE_SETS["interview_knowledge_base"],
+    )
+    tracked_steps = (*CHAPTER_BASE_STEPS, *writer_steps)
+    if review_enabled:
+        tracked_steps = (*tracked_steps, "review")
+    return tracked_steps
+
+
 @dataclass(frozen=True)
 class ChapterRuntimeSnapshot:
     chapter_id: str
@@ -59,10 +70,7 @@ class RuntimeStateReader:
         run_identity = runtime.get("run_identity", {})
         target_output = run_identity.get("target_output") or blueprint.get("policy", {}).get("target_output")
         review_enabled = bool(run_identity.get("review_enabled", False))
-        writer_steps = WRITER_STAGE_SETS.get(target_output or "interview_knowledge_base", WRITER_STAGE_SETS["interview_knowledge_base"])
-        tracked_steps = (*CHAPTER_BASE_STEPS, *writer_steps)
-        if review_enabled:
-            tracked_steps = (*tracked_steps, "review")
+        tracked_steps = resolve_required_chapter_steps(target_output, review_enabled)
         completed_steps = {step_name: 0 for step_name in (*CHAPTER_BASE_STEPS, *OPTIONAL_CHAPTER_STEPS)}
         chapter_states: dict[str, ChapterRuntimeSnapshot] = {}
 

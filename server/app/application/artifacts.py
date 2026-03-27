@@ -3,15 +3,17 @@ from __future__ import annotations
 import io
 import json
 import zipfile
+from pathlib import Path, PurePosixPath
 from typing import Any
-from pathlib import Path
 
+from server.app.adapters.runtime_reader import RuntimeStateReader, resolve_required_chapter_steps
 from server.app.models.review_summary import ReviewIssueDetail, ReviewReportSummary, ReviewSummary
 
 
 class ArtifactService:
     def __init__(self, output_root: Path) -> None:
         self._output_root = output_root
+        self._runtime_reader = RuntimeStateReader(output_root)
 
     def list_tree(self, course_id: str) -> dict[str, object] | None:
         course_dir = self._course_dir(course_id)
@@ -94,11 +96,18 @@ class ArtifactService:
             )
         return str(issue)
 
-    def export_zip(self, course_id: str) -> tuple[str, bytes] | None:
+    def export_zip(
+        self,
+        course_id: str,
+        *,
+        completed_chapters_only: bool = False,
+        final_outputs_only: bool = False,
+    ) -> tuple[str, bytes] | None:
         course_dir = self._course_dir(course_id)
         if not course_dir.exists():
             return None
 
+        export_ready_chapters = self._export_ready_chapters(course_id) if completed_chapters_only else None
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
             for path in sorted(course_dir.rglob("*")):
@@ -106,6 +115,13 @@ class ArtifactService:
                     continue
                 relative = path.relative_to(course_dir).as_posix()
                 if not self._is_public_artifact(relative):
+                    continue
+                if not self._should_export_path(
+                    relative,
+                    completed_chapters_only=completed_chapters_only,
+                    final_outputs_only=final_outputs_only,
+                    export_ready_chapters=export_ready_chapters,
+                ):
                     continue
                 archive.write(path, arcname=f"{course_id}/{relative}")
         return (f"{course_id}.zip", buffer.getvalue())
@@ -123,6 +139,42 @@ class ArtifactService:
     @staticmethod
     def _is_public_artifact(relative_path: str) -> bool:
         return relative_path != "runtime/llm_calls.jsonl"
+
+    def _export_ready_chapters(self, course_id: str) -> set[str]:
+        runtime = self._runtime_reader.read(course_id)
+        if runtime is None:
+            return set()
+        required_steps = resolve_required_chapter_steps(runtime.target_output, runtime.review_enabled)
+        if not required_steps:
+            return set()
+        return {
+            chapter_id
+            for chapter_id, chapter_state in runtime.chapter_states.items()
+            if all(chapter_state.steps.get(step_name, {}).get("status") == "completed" for step_name in required_steps)
+        }
+
+    @staticmethod
+    def _should_export_path(
+        relative_path: str,
+        *,
+        completed_chapters_only: bool,
+        final_outputs_only: bool,
+        export_ready_chapters: set[str] | None,
+    ) -> bool:
+        parts = PurePosixPath(relative_path).parts
+        chapter_id = ArtifactService._chapter_id_from_parts(parts)
+        if final_outputs_only:
+            if len(parts) < 4 or parts[0] != "chapters" or parts[2] != "notebooklm":
+                return False
+        if completed_chapters_only and chapter_id is not None:
+            return export_ready_chapters is not None and chapter_id in export_ready_chapters
+        return not completed_chapters_only or chapter_id is None
+
+    @staticmethod
+    def _chapter_id_from_parts(parts: tuple[str, ...]) -> str | None:
+        if len(parts) >= 2 and parts[0] == "chapters":
+            return parts[1]
+        return None
 
     @staticmethod
     def _detect_kind(path: Path) -> str:

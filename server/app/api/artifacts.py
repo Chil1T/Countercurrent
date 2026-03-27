@@ -34,8 +34,16 @@ def build_artifacts_router(service: ArtifactService) -> APIRouter:
         return payload
 
     @router.get("/courses/{course_id}/export")
-    def export_course(course_id: str):
-        payload = service.export_zip(course_id)
+    def export_course(
+        course_id: str,
+        completed_chapters_only: bool = Query(False),
+        final_outputs_only: bool = Query(False),
+    ):
+        payload = service.export_zip(
+            course_id,
+            completed_chapters_only=completed_chapters_only,
+            final_outputs_only=final_outputs_only,
+        )
         if payload is None:
             raise HTTPException(status_code=404, detail="Course artifacts not found")
         filename, content = payload

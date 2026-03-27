@@ -3,6 +3,15 @@ export type StageStatus = {
   status: string;
 };
 
+export type ChapterProgress = {
+  chapter_id: string;
+  status: string;
+  current_step: string | null;
+  completed_step_count: number;
+  total_step_count: number;
+  export_ready: boolean;
+};
+
 export type RunSession = {
   id: string;
   draft_id: string;
@@ -19,6 +28,7 @@ export type RunSession = {
   review_enabled: boolean;
   review_mode: string | null;
   stages: StageStatus[];
+  chapter_progress: ChapterProgress[];
   last_error: string | null;
 };
 

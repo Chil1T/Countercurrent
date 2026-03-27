@@ -35,6 +35,12 @@ export type ReviewSummary = {
   }>;
 };
 
+export type ExportUrlOptions = {
+  cacheBust?: string;
+  completedChaptersOnly?: boolean;
+  finalOutputsOnly?: boolean;
+};
+
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
@@ -72,10 +78,28 @@ export async function getReviewSummary(courseId: string): Promise<ReviewSummary>
   return (await response.json()) as ReviewSummary;
 }
 
-export function buildExportUrl(courseId: string, cacheBust?: string): string {
+export function buildExportUrl(
+  courseId: string,
+  cacheBustOrOptions?: string | ExportUrlOptions,
+): string {
   const base = `${API_BASE_URL}/courses/${courseId}/export`;
-  if (!cacheBust) {
+  const options =
+    typeof cacheBustOrOptions === "string"
+      ? { cacheBust: cacheBustOrOptions }
+      : (cacheBustOrOptions ?? {});
+  const params = new URLSearchParams();
+  if (options.cacheBust) {
+    params.set("v", options.cacheBust);
+  }
+  if (options.completedChaptersOnly) {
+    params.set("completed_chapters_only", "true");
+  }
+  if (options.finalOutputsOnly) {
+    params.set("final_outputs_only", "true");
+  }
+  const query = params.toString();
+  if (!query) {
     return base;
   }
-  return `${base}?v=${encodeURIComponent(cacheBust)}`;
+  return `${base}?${query}`;
 }
