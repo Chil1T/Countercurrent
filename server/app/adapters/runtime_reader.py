@@ -66,7 +66,8 @@ class RuntimeStateReader:
         completed_steps = {step_name: 0 for step_name in (*CHAPTER_BASE_STEPS, *OPTIONAL_CHAPTER_STEPS)}
         chapter_states: dict[str, ChapterRuntimeSnapshot] = {}
 
-        for chapter_id in self._ordered_chapter_ids(blueprint, runtime_chapters):
+        ordered_chapter_ids = self._ordered_chapter_ids(blueprint, runtime_chapters)
+        for chapter_id in ordered_chapter_ids:
             chapter_state = runtime_chapters.get(chapter_id, {})
             steps = chapter_state.get("steps", {})
             normalized_steps = {
@@ -82,7 +83,7 @@ class RuntimeStateReader:
         last_error = runtime.get("last_error")
         last_error_kind = self._resolve_last_error_kind(last_error, chapter_states)
         return RuntimeSnapshot(
-            chapter_count=len(runtime_chapters),
+            chapter_count=len(ordered_chapter_ids),
             completed_steps=completed_steps,
             blueprint_ready=True,
             global_steps={

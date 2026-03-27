@@ -807,6 +807,106 @@ class RunsApiTests(unittest.TestCase):
             },
         ])
 
+    def test_get_run_keeps_stage_aggregate_aligned_with_blueprint_chapter_population(self) -> None:
+        draft_payload = self.client.post(
+            "/course-drafts",
+            json={
+                "book_title": "Operating Systems",
+                "subtitle_text": "# 第1章 进程\n\n本节介绍进程与线程。",
+            },
+        ).json()
+        run_payload = self.client.post("/runs", json={"draft_id": draft_payload["id"]}).json()
+        run_id = run_payload["id"]
+        course_id = run_payload["course_id"]
+        course_dir = self.output_root / "courses" / course_id
+        course_dir.mkdir(parents=True, exist_ok=True)
+        (course_dir / "course_blueprint.json").write_text(
+            json.dumps(
+                {
+                    "course_id": course_id,
+                    "course_name": "Operating Systems",
+                    "blueprint_hash": "hash",
+                    "chapters": [
+                        {"chapter_id": "chapter-01", "title": "chapter-01"},
+                        {"chapter_id": "chapter-02", "title": "chapter-02"},
+                    ],
+                    "policy": {
+                        "target_output": "interview_knowledge_base",
+                        "review_mode": "standard",
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        (course_dir / "runtime_state.json").write_text(
+            json.dumps(
+                {
+                    "course_id": course_id,
+                    "blueprint_hash": "hash",
+                    "run_identity": {
+                        "review_enabled": False,
+                        "review_mode": "standard",
+                        "target_output": "interview_knowledge_base",
+                    },
+                    "chapters": {
+                        "chapter-01": {
+                            "steps": {
+                                "ingest": {"status": "completed"},
+                                "curriculum_anchor": {"status": "completed"},
+                                "gap_fill": {"status": "completed"},
+                                "pack_plan": {"status": "completed"},
+                                "write_lecture_note": {"status": "completed"},
+                                "write_terms": {"status": "completed"},
+                                "write_interview_qa": {"status": "completed"},
+                                "write_cross_links": {"status": "completed"},
+                            }
+                        }
+                    },
+                    "global": {},
+                    "last_error": None,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        self.runner.snapshots[run_id] = {"status": "running", "last_error": None}
+
+        response = self.client.get(f"/runs/{run_id}")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        stage_statuses = {stage["name"]: stage["status"] for stage in payload["stages"]}
+        self.assertEqual(stage_statuses["build_blueprint"], "completed")
+        self.assertEqual(stage_statuses["ingest"], "running")
+        self.assertEqual(stage_statuses["curriculum_anchor"], "running")
+        self.assertEqual(stage_statuses["gap_fill"], "running")
+        self.assertEqual(stage_statuses["pack_plan"], "running")
+        self.assertEqual(stage_statuses["write_lecture_note"], "running")
+        self.assertEqual(stage_statuses["write_terms"], "running")
+        self.assertEqual(stage_statuses["write_interview_qa"], "running")
+        self.assertEqual(stage_statuses["write_cross_links"], "running")
+        self.assertEqual(payload["chapter_progress"], [
+            {
+                "chapter_id": "chapter-01",
+                "status": "completed",
+                "current_step": None,
+                "completed_step_count": 8,
+                "total_step_count": 8,
+                "export_ready": True,
+            },
+            {
+                "chapter_id": "chapter-02",
+                "status": "running",
+                "current_step": "ingest",
+                "completed_step_count": 0,
+                "total_step_count": 8,
+                "export_ready": False,
+            },
+        ])
+
     def test_get_run_stops_auto_resume_when_resume_budget_is_exhausted_after_restart(self) -> None:
         self._configure_openai_runtime(max_resume_attempts=1)
         draft_payload = self.client.post(
@@ -1576,7 +1676,7 @@ class RunsApiTests(unittest.TestCase):
         self.assertEqual(payload["simple_model"], "gpt-5.4-mini")
         self.assertEqual(payload["complex_model"], "gpt-5.4")
 
-    def test_get_run_uses_runtime_chapter_scopes_for_completion_after_restart(self) -> None:
+    def test_get_run_does_not_mark_restart_completed_when_blueprint_has_unmaterialized_chapters(self) -> None:
         draft_payload = self.client.post(
             "/course-drafts",
             json={
@@ -1639,7 +1739,26 @@ class RunsApiTests(unittest.TestCase):
         response = restarted_client.get(f"/runs/{run_id}")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["status"], "completed")
+        payload = response.json()
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["chapter_progress"], [
+            {
+                "chapter_id": "chapter-01",
+                "status": "completed",
+                "current_step": None,
+                "completed_step_count": 8,
+                "total_step_count": 8,
+                "export_ready": True,
+            },
+            {
+                "chapter_id": "chapter-02",
+                "status": "pending",
+                "current_step": None,
+                "completed_step_count": 0,
+                "total_step_count": 8,
+                "export_ready": False,
+            },
+        ])
 
     def test_get_run_marks_orphaned_running_run_failed_after_restart(self) -> None:
         draft_payload = self.client.post(
