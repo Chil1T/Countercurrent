@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from threading import local
 from typing import Any, Callable, TypeVar
@@ -18,9 +19,18 @@ class RetryDecision:
 
 
 class RetryingLLMBackend:
-    def __init__(self, *, backend: LLMBackend, provider_policy: ProviderExecutionPolicy) -> None:
+    def __init__(
+        self,
+        *,
+        backend: LLMBackend,
+        provider_policy: ProviderExecutionPolicy,
+        sleep: Callable[[float], None] = time.sleep,
+        initial_backoff_seconds: float = 1.0,
+    ) -> None:
         self.backend = backend
         self.provider_policy = provider_policy
+        self.sleep = sleep
+        self.initial_backoff_seconds = initial_backoff_seconds
         self._call_metadata = local()
 
     def generate_json(
@@ -99,8 +109,12 @@ class RetryingLLMBackend:
                 if not will_retry:
                     self._store_call_metadata(attempts)
                     raise
+                self.sleep(self._backoff_seconds_for_attempt(attempt_number))
 
         raise RuntimeError("Retry loop exited unexpectedly")
+
+    def _backoff_seconds_for_attempt(self, attempt_number: int) -> float:
+        return self.initial_backoff_seconds * (2 ** (attempt_number - 1))
 
     def _consume_inner_metadata(self) -> dict[str, Any] | None:
         consume = getattr(self.backend, "consume_last_call_metadata", None)

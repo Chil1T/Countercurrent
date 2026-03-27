@@ -80,7 +80,7 @@ class RetryingLLMBackendTest(unittest.TestCase):
                 {"status": "ok"},
             ]
         )
-        wrapped = RetryingLLMBackend(backend=backend, provider_policy=self._policy())
+        wrapped = RetryingLLMBackend(backend=backend, provider_policy=self._policy(), sleep=lambda _seconds: None)
 
         response = wrapped.generate_json("curriculum_anchor", "prompt", {"chapter": 1})
         metadata = wrapped.consume_last_call_metadata()
@@ -90,6 +90,31 @@ class RetryingLLMBackendTest(unittest.TestCase):
         self.assertEqual(metadata["attempt_count"], 3)
         self.assertEqual([item["status"] for item in metadata["retry_history"]], ["error", "error", "completed"])
         self.assertEqual(metadata["last_error_kind"], "http_status:503")
+
+    def test_transient_errors_sleep_with_exponential_backoff(self) -> None:
+        from processagent.llm import LLMHTTPError
+        from processagent.retrying_llm import RetryingLLMBackend
+
+        backend = ScriptedLLMBackend(
+            [
+                LLMHTTPError(status_code=429, detail="busy"),
+                LLMHTTPError(status_code=503, detail="overloaded"),
+                {"status": "ok"},
+            ]
+        )
+        sleep_calls: list[float] = []
+        wrapped = RetryingLLMBackend(
+            backend=backend,
+            provider_policy=self._policy(),
+            sleep=sleep_calls.append,
+            initial_backoff_seconds=0.25,
+        )
+
+        response = wrapped.generate_json("curriculum_anchor", "prompt", {"chapter": 1})
+
+        self.assertEqual(response, {"status": "ok"})
+        self.assertEqual(backend.calls, 3)
+        self.assertEqual(sleep_calls, [0.25, 0.5])
 
     def test_transient_network_error_retries(self) -> None:
         from processagent.llm import LLMNetworkError
@@ -101,7 +126,7 @@ class RetryingLLMBackendTest(unittest.TestCase):
                 {"status": "ok"},
             ]
         )
-        wrapped = RetryingLLMBackend(backend=backend, provider_policy=self._policy())
+        wrapped = RetryingLLMBackend(backend=backend, provider_policy=self._policy(), sleep=lambda _seconds: None)
 
         wrapped.generate_json("curriculum_anchor", "prompt", {"chapter": 1})
         metadata = wrapped.consume_last_call_metadata()
@@ -115,13 +140,19 @@ class RetryingLLMBackendTest(unittest.TestCase):
         from processagent.retrying_llm import RetryingLLMBackend
 
         backend = ScriptedLLMBackend([LLMHTTPError(status_code=400, detail="bad request")])
-        wrapped = RetryingLLMBackend(backend=backend, provider_policy=self._policy())
+        sleep_calls: list[float] = []
+        wrapped = RetryingLLMBackend(
+            backend=backend,
+            provider_policy=self._policy(),
+            sleep=sleep_calls.append,
+        )
 
         with self.assertRaises(LLMHTTPError):
             wrapped.generate_json("curriculum_anchor", "prompt", {"chapter": 1})
 
         metadata = wrapped.consume_last_call_metadata()
         self.assertEqual(backend.calls, 1)
+        self.assertEqual(sleep_calls, [])
         self.assertEqual(metadata["attempt_count"], 1)
         self.assertEqual(metadata["last_error_kind"], "http_status:400")
 
@@ -136,7 +167,11 @@ class RetryingLLMBackendTest(unittest.TestCase):
                 LLMHTTPError(status_code=429, detail="give up"),
             ]
         )
-        wrapped = RetryingLLMBackend(backend=backend, provider_policy=self._policy(max_call_attempts=3))
+        wrapped = RetryingLLMBackend(
+            backend=backend,
+            provider_policy=self._policy(max_call_attempts=3),
+            sleep=lambda _seconds: None,
+        )
 
         with self.assertRaises(LLMHTTPError):
             wrapped.generate_json("curriculum_anchor", "prompt", {"chapter": 1})
