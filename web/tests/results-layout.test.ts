@@ -11,14 +11,11 @@ const pageSource = readFileSync(
   "utf8",
 );
 
-test("results page keeps the left rail sticky with review/export directly under the tree", () => {
+test("results page keeps the left rail sticky and elastic to viewport height without rigid tree cutoff", () => {
   assert.match(workbenchSource, /xl:sticky xl:top-24 xl:self-start/);
-  assert.match(workbenchSource, /h-\[26rem\]/);
-  assert.match(workbenchSource, /overflow-x-hidden overflow-y-auto pr-1 text-sm text-stone-700/);
-  assert.match(workbenchSource, /style=\{\{ paddingLeft: depth > 0 \? `\$\{depth \* 0\.75\}rem` : 0 \}\}/);
-  assert.doesNotMatch(workbenchSource, /style=\{\{ marginLeft:/);
-  assert.doesNotMatch(workbenchSource, /xl:max-h-\[calc\(100vh-8\.5rem\)\]/);
-  assert.doesNotMatch(workbenchSource, /xl:overflow-auto/);
+  assert.doesNotMatch(workbenchSource, /h-\[26rem\]/);
+  assert.match(workbenchSource, /xl:h-\[calc\(100vh-8\.5rem\)\] xl:grid-rows-\[minmax\(0,1fr\)_auto\]/);
+  assert.match(workbenchSource, /flex-1 overflow-x-hidden overflow-y-auto pr-1 text-sm text-stone-700/);
 });
 
 test("results page keeps the preview header sticky while the preview body scrolls", () => {

@@ -121,6 +121,19 @@ export async function cleanRun(runId: string): Promise<RunSession> {
   return (await response.json()) as RunSession;
 }
 
+export async function getCourseResultsContext(courseId: string): Promise<CourseResultsContext> {
+  const response = await fetch(`${API_BASE_URL}/courses/${courseId}/results-context`, {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`Failed to load course results context: ${response.status} ${message}`);
+  }
+
+  return (await response.json()) as CourseResultsContext;
+}
+
 export async function getRunLog(runId: string): Promise<RunLogPreview> {
   const response = await fetch(`${API_BASE_URL}/runs/${runId}/log`, {
     cache: "no-store",

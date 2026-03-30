@@ -7,7 +7,7 @@ import {
   getArtifactGroupLabel,
   getArtifactTreeCardClass,
   isArtifactTreeLoading,
-} from "../lib/results-view";
+} from "../lib/results-view.ts";
 
 test("artifact tree displays only the final file name", () => {
   assert.equal(

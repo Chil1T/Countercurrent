@@ -166,6 +166,8 @@ export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?
   const [reviewSummary, setReviewSummary] = useState<ReviewSummary | null>(null);
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
+  const [exportCompletedOnly, setExportCompletedOnly] = useState(true);
+  const [exportFinalOnly, setExportFinalOnly] = useState(true);
   const previousRunRef = useRef<RunSession | null>(null);
 
   useEffect(() => {
@@ -236,8 +238,6 @@ export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?
 
                 const nextTree = buildArtifactTree(tree.nodes);
                 const firstPreviewable = findFirstSelectablePath(nextTree) ?? null;
-                const nextExpandedKeys = new Set(collectTreeSectionKeys(nextTree));
-                setExpandedKeys((current) => new Set([...current, ...nextExpandedKeys]));
                 setSelectedPath((current) => {
                   if (!current) {
                     return firstPreviewable;
@@ -311,10 +311,10 @@ export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?
   }
 
   return (
-    <section className="grid min-h-[calc(100vh-12rem)] gap-5 xl:grid-cols-[minmax(250px,300px)_minmax(0,1fr)]">
-      <div className="min-w-0 grid gap-5 xl:sticky xl:top-24 xl:self-start">
-        <div className="min-h-0 rounded-[28px] border border-stone-200 bg-stone-50 p-5">
-          <h3 className="text-lg font-semibold">文件树</h3>
+    <section className="grid min-h-[calc(100vh-12rem)] gap-5 xl:grid-cols-[minmax(250px,350px)_minmax(0,1fr)]">
+      <div className="min-w-0 grid gap-5 xl:sticky xl:top-24 xl:h-[calc(100vh-8.5rem)] xl:grid-rows-[minmax(0,1fr)_auto]">
+        <div className="flex min-h-0 flex-col rounded-[28px] border border-stone-200 bg-stone-50 p-5">
+          <h3 className="shrink-0 text-lg font-semibold">文件树</h3>
           {runId && run ? (
             <div className="mt-4 rounded-xl border border-stone-200 bg-stone-100 px-4 py-2.5 text-xs text-stone-600">
               <span className="font-medium text-stone-800">Scoped view</span>: Viewing Run {run.id.slice(0, 8)} ({run.status})
@@ -329,7 +329,7 @@ export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?
               文件仍在生成中，完成后会自动出现在这里。
             </div>
           ) : null}
-          <div className="mt-4 h-[26rem] overflow-x-hidden overflow-y-auto pr-1 text-sm text-stone-700">
+          <div className="mt-4 flex-1 overflow-x-hidden overflow-y-auto pr-1 text-sm text-stone-700">
             {treeSections.map((section) => {
               const sectionExpanded = expandedKeys.has(section.key);
 
@@ -424,9 +424,33 @@ export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?
                 </ul>
               </div>
             </div>
-            <div>
+            <div className="grid gap-3 pt-2">
+              <label className="flex cursor-pointer items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={exportCompletedOnly}
+                  onChange={(e) => setExportCompletedOnly(e.target.checked)}
+                  className="rounded border-stone-600 bg-[#15120f] text-stone-900 focus:ring-stone-400 focus:ring-offset-[#15120f]"
+                />
+                <span className="select-none text-sm">只导出已完成章节</span>
+              </label>
+              <label className="flex cursor-pointer items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={exportFinalOnly}
+                  onChange={(e) => setExportFinalOnly(e.target.checked)}
+                  className="rounded border-stone-600 bg-[#15120f] text-stone-900 focus:ring-stone-400 focus:ring-offset-[#15120f]"
+                />
+                <span className="select-none text-sm">仅导出最终产物 (排除中间数据)</span>
+              </label>
+            </div>
+            <div className="pt-2">
               <a
-                href={buildExportUrl(courseId, exportCacheBust)}
+                href={buildExportUrl(courseId, {
+                  cacheBust: exportCacheBust,
+                  completedChaptersOnly: exportCompletedOnly,
+                  finalOutputsOnly: exportFinalOnly,
+                })}
                 className="inline-flex rounded-full bg-white px-5 py-3 text-sm font-medium text-stone-900 transition hover:bg-stone-200"
               >
                 导出 ZIP

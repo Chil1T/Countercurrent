@@ -429,6 +429,7 @@ out/_gui/frontend-dev.log
 - 配置页的“启动 / 继续运行”遵循 CLI 的 resume 语义：同一 `course_id` 下已有且仍然有效的 checkpoint 会被复用，不默认强制全量重跑。
 - `resume` 会继续同一个 run 的冻结流水线身份；如果你修改了 provider/model/base_url/key/timeout，恢复时会读取新 routing；如果你修改了模板或 Review 策略，请创建新的 run。
 - 运行页已接入 `SSE` 事件流，并提供 `resume` / `clean` 控制动作。
+- 运行页的主视图已调整为并发展示多个章节的执行进度，原先串行的 stages 列表降级为课程级次要信息。
 - 运行页右侧已接入日志面板：先拉取 log preview，再通过 `run.log` 事件流增量追加。
 - 运行页摘要卡现在会明确显示 `backend`、`hosted/heuristic`、`simple_model`、`complex_model`、`review_mode`、`target_output`，用于区分“页面已打开”和“runtime 实际采用的配置”。
 - `RunSession` 当前会持久化到 `out/_gui/runs/<run_id>/session.json`，后端重启后，已存在的 run 页面不再直接因内存态丢失而 404。
@@ -441,10 +442,12 @@ out/_gui/frontend-dev.log
   - `retry_history`：按尝试顺序记录每次 error/completed 与 `will_retry`
   - `last_error_kind`：最近一次失败尝试的错误类型；即使最终一次已成功，也可能保留最后一次 transient error 的种类
 - 结果页已接通 artifacts tree、文件预览、review 摘要和 ZIP 导出。
-- artifacts API / 前端 URL builder 当前支持两类导出过滤参数，但 GUI 结果页还没有暴露对应筛选控件：
-  - `completed_chapters_only=true`：只导出严格口径 `export_ready` 的章节作用域文件；课程根文件与非章节文件仍保留
-  - `final_outputs_only=true`：只导出 `chapters/<chapter_id>/notebooklm/*`
+- 结果页已暴露 artifacts API 的两类导出过滤参数（默认开启）：
+  - “只导出已完成章节”（`completed_chapters_only=true`）：只导出严格口径 `export_ready` 的章节作用域文件；课程根文件与非章节文件仍保留
+  - “仅导出最终产物”（`final_outputs_only=true`）：只导出 `chapters/<chapter_id>/notebooklm/*`
 - 两个过滤参数同时存在时，结果是“严格 completed chapter”与“最终产物目录”的交集。
+- 结果页文件树已支持渲染按课程级最新 context 获取的章节状态（pending/running/failed/completed/export_ready），同时当 URL 中带有特定 runId 时会通过 badge 提示当前是 Scoped view。
+- 结果页文件树在 `SSE` 自动刷新时会保持当前的展开与选中状态，不再盲目展开新节点。
 - 结果页文件树当前按 `章节 -> 最终产物 / 中间数据 -> 文件` 分层；若对应 run 尚未完成，会显示“文件仍在生成中”的提示，而不是把空树误判为失败。
 - 如果结果页在 run 仍未完成时已经打开，artifact tree 与 review summary 当前会在 `run.update` 推进时自动刷新，不需要手动刷新页面。
 - FastAPI 默认以仓库根目录推导 `workspace_root` 与 `out/`，结果页不再依赖 uvicorn 是从哪个当前目录启动的。
