@@ -1,5 +1,35 @@
 # Plans
 
+## 2026-03-30 GUI Concurrency / Results UX
+
+- Status: in_progress
+- Goal: 重构运行页与结果页的信息架构，使 GUI 能正确表达多章节并发、课程级章节状态、过滤导出和稳定文件树交互，而不打破当前 runtime contract。
+
+### Scope
+
+- 运行页以章节卡片为主视图展示并发进度
+- 结果页以课程级最新状态标记章节文件夹
+- 导出区支持“仅已完成章节 / 仅最终产物”
+- 文件树自动刷新但保留手动展开状态与当前选中文件
+- 结果页左右布局在深层展开下保持稳定
+
+### Execution Batches
+
+1. 待执行：补课程级结果状态 read API
+2. 待执行：运行页并发章节卡片视图
+3. 待执行：结果页章节状态文件树
+4. 待执行：过滤导出与稳定自动刷新
+5. 待执行：结果页布局稳定化
+6. 待执行：文档与验证收口
+
+### Validation
+
+- `python -m unittest server.tests.test_runs_api -v`
+- `node --experimental-strip-types --test web/tests/artifacts-api.test.ts web/tests/results-view.test.ts web/tests/results-refresh.test.ts web/tests/results-layout.test.ts web/tests/run-workbench-layout.test.ts web/tests/run-workbench-chapter-progress.test.ts web/tests/results-workbench-state.test.ts`
+- `python -m unittest server.tests.test_health server.tests.test_course_drafts_api server.tests.test_templates_api server.tests.test_runs_api server.tests.test_artifacts_api -v`
+- `npm run lint`
+- `npm run build`
+
 ## 2026-03-27 Runtime Concurrency / Retry / Export
 
 - Status: completed
