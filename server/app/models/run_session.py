@@ -58,3 +58,8 @@ class RunLogChunk(BaseModel):
     cursor: int
     content: str
     complete: bool
+
+class CourseResultsContext(BaseModel):
+    course_id: str
+    latest_run: RunSession | None = None
+

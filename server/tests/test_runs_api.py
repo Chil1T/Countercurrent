@@ -2069,3 +2069,36 @@ class RunsApiTests(unittest.TestCase):
         status_codes = sorted(status for status, _payload in responses)
         self.assertEqual(status_codes, [201, 409])
         self.assertEqual(len(slow_runner.started_specs), 1)
+
+    def test_get_course_results_context_returns_latest_chapter_run(self) -> None:
+        draft_payload = self.client.post(
+            "/course-drafts",
+            json={
+                "book_title": "Computer Networks",
+                "subtitle_text": "# 第1章 绪论\n\n本节介绍网络分层。",
+            },
+        ).json()
+        run_payload = self.client.post("/runs", json={"draft_id": draft_payload["id"]}).json()
+        run_id = run_payload["id"]
+        course_id = run_payload["course_id"]
+
+        self.runner.snapshots[run_id] = {"status": "running", "last_error": None}
+
+        response = self.client.get(f"/courses/{course_id}/results-context")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["course_id"], course_id)
+        self.assertIsNotNone(payload.get("latest_run"))
+        self.assertEqual(payload["latest_run"]["id"], run_id)
+        self.assertEqual(payload["latest_run"]["status"], "running")
+        self.assertIn("chapter_progress", payload["latest_run"])
+        self.assertIn("stages", payload["latest_run"])
+
+    def test_get_course_results_context_returns_empty_when_no_chapter_run(self) -> None:
+        response = self.client.get("/courses/non-existent-course/results-context")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["course_id"], "non-existent-course")
+        self.assertIsNone(payload.get("latest_run"))
+

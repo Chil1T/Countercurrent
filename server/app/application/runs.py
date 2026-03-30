@@ -194,6 +194,31 @@ class RunService:
         self._runs[run_id] = record
         return self._refresh_run_record(record, allow_auto_resume=True)
 
+    def get_course_results_context(self, course_id: str):
+        from server.app.models.run_session import CourseResultsContext
+        latest_record: _RunRecord | None = None
+        latest_mtime: float = -1
+        
+        for record in self._iter_records():
+            if record.session.course_id != course_id or record.session.run_kind != "chapter":
+                continue
+                
+            path = self._record_path(record.session.id)
+            mtime = path.stat().st_mtime if path.exists() else 0
+            if mtime > latest_mtime:
+                latest_mtime = mtime
+                latest_record = record
+                
+        latest_run = None
+        if latest_record is not None:
+            self._runs[latest_record.session.id] = latest_record
+            latest_run = self._refresh_run_record(latest_record, allow_auto_resume=True)
+            
+        return CourseResultsContext(
+            course_id=course_id,
+            latest_run=latest_run,
+        )
+
     def _refresh_run_record(self, record: _RunRecord, *, allow_auto_resume: bool) -> RunSession:
         snapshot = self._runner.snapshot(record.session.id)
         runtime = self._runtime_reader.read(record.session.course_id)
