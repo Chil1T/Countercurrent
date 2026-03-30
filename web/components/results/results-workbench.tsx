@@ -11,7 +11,7 @@ import {
   type ArtifactNode,
   type ReviewSummary,
 } from "@/lib/api/artifacts";
-import { getRun, subscribeRunEvents, type RunSession } from "@/lib/api/runs";
+import { getRun, getCourseResultsContext, subscribeRunEvents, type RunSession, type CourseResultsContext } from "@/lib/api/runs";
 import { shouldRefreshArtifactsOnRunUpdate } from "@/lib/results-refresh";
 import {
   getArtifactDisplayName,
@@ -74,12 +74,13 @@ function getTreePathAncestors(path: string): string[] {
 }
 
 async function loadArtifactSnapshot(courseId: string, runId?: string | null) {
-  const [tree, summary, nextRun] = await Promise.all([
+  const [tree, summary, context, nextRun] = await Promise.all([
     getArtifactTree(courseId),
     getReviewSummary(courseId),
+    getCourseResultsContext(courseId).catch(() => null),
     runId ? getRun(runId).catch(() => null) : Promise.resolve(null),
   ]);
-  return { tree, summary, nextRun };
+  return { tree, summary, context, nextRun };
 }
 
 function TreeNode({
@@ -87,6 +88,7 @@ function TreeNode({
   depth,
   selectedPath,
   expandedKeys,
+  chapterStatusMap,
   onToggleFolder,
   onSelectFile,
 }: {
@@ -94,11 +96,13 @@ function TreeNode({
   depth: number;
   selectedPath: string | null;
   expandedKeys: Set<string>;
+  chapterStatusMap?: Map<string, string>;
   onToggleFolder: (key: string) => void;
   onSelectFile: (path: string) => void;
 }) {
   const isFolder = "children" in node;
   const isActive = isFolder ? expandedKeys.has(node.key) : node.path === selectedPath;
+  const chapterStatus = isFolder && depth === 0 && chapterStatusMap?.has(node.key) ? chapterStatusMap.get(node.key) : null;
 
   return (
     <div className="min-w-0" style={{ paddingLeft: depth > 0 ? `${depth * 0.75}rem` : 0 }}>
@@ -116,7 +120,19 @@ function TreeNode({
           isActive,
         )}`}
       >
-        <span className="min-w-0 truncate font-medium">{node.label}</span>
+        <span className="min-w-0 flex items-center gap-2 truncate">
+          <span className="truncate font-medium">{node.label}</span>
+          {chapterStatus && (
+            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wider ${
+              chapterStatus === "completed" ? "bg-emerald-100 text-emerald-700" :
+              chapterStatus === "running" ? "bg-amber-100 text-amber-700" :
+              chapterStatus === "failed" ? "bg-rose-100 text-rose-700" :
+              "bg-stone-200 text-stone-600"
+            }`}>
+              {chapterStatus}
+            </span>
+          )}
+        </span>
         <span className="shrink-0 text-xs uppercase tracking-[0.18em]">
           {isFolder ? (isActive ? "收起" : "展开") : "文件"}
         </span>
@@ -130,6 +146,7 @@ function TreeNode({
               depth={depth + 1}
               selectedPath={selectedPath}
               expandedKeys={expandedKeys}
+              chapterStatusMap={chapterStatusMap}
               onToggleFolder={onToggleFolder}
               onSelectFile={onSelectFile}
             />
@@ -143,6 +160,7 @@ function TreeNode({
 export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?: string | null }) {
   const [nodes, setNodes] = useState<ArtifactNode[]>([]);
   const [run, setRun] = useState<RunSession | null>(null);
+  const [context, setContext] = useState<CourseResultsContext | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [content, setContent] = useState<ArtifactContent | null>(null);
   const [reviewSummary, setReviewSummary] = useState<ReviewSummary | null>(null);
@@ -156,12 +174,13 @@ export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?
     async function refreshArtifacts(preserveSelection: boolean) {
       setError(null);
       try {
-        const { tree, summary, nextRun } = await loadArtifactSnapshot(courseId, runId);
+        const { tree, summary, context, nextRun } = await loadArtifactSnapshot(courseId, runId);
         if (cancelled) {
           return;
         }
         setNodes(tree.nodes);
         setReviewSummary(summary);
+        setContext(context);
         setRun(nextRun);
         previousRunRef.current = nextRun;
 
@@ -207,12 +226,13 @@ export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?
         if (!cancelled) {
           if (shouldRefreshArtifactsOnRunUpdate(previousRunRef.current, nextRun)) {
             void loadArtifactSnapshot(courseId, runId)
-              .then(({ tree, summary }) => {
+              .then(({ tree, summary, context }) => {
                 if (cancelled) {
                   return;
                 }
                 setNodes(tree.nodes);
                 setReviewSummary(summary);
+                setContext(context);
 
                 const nextTree = buildArtifactTree(tree.nodes);
                 const firstPreviewable = findFirstSelectablePath(nextTree) ?? null;
@@ -271,6 +291,10 @@ export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?
   }, [courseId, selectedPath]);
 
   const treeSections = useMemo(() => buildArtifactTree(nodes), [nodes]);
+  const chapterStatusMap = useMemo(() => {
+    const activeChapterProgress = run?.chapter_progress ?? context?.latest_run?.chapter_progress ?? [];
+    return new Map(activeChapterProgress.map((c) => [c.chapter_id, c.status]));
+  }, [run?.chapter_progress, context?.latest_run?.chapter_progress]);
   const loadingArtifacts = isArtifactTreeLoading(run?.status);
   const previewContent = selectedPath ? content : null;
   const exportCacheBust = useMemo(
@@ -291,6 +315,15 @@ export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?
       <div className="min-w-0 grid gap-5 xl:sticky xl:top-24 xl:self-start">
         <div className="min-h-0 rounded-[28px] border border-stone-200 bg-stone-50 p-5">
           <h3 className="text-lg font-semibold">文件树</h3>
+          {runId && run ? (
+            <div className="mt-4 rounded-xl border border-stone-200 bg-stone-100 px-4 py-2.5 text-xs text-stone-600">
+              <span className="font-medium text-stone-800">Scoped view</span>: Viewing Run {run.id.slice(0, 8)} ({run.status})
+            </div>
+          ) : context?.latest_run ? (
+            <div className="mt-4 rounded-xl border border-stone-200 bg-emerald-50/50 px-4 py-2.5 text-xs text-stone-600">
+              <span className="font-medium text-emerald-800">Course view</span>: Showing latest state
+            </div>
+          ) : null}
           {loadingArtifacts ? (
             <div className="mt-4 rounded-2xl border border-stone-200 bg-white px-4 py-3 text-sm text-stone-700">
               文件仍在生成中，完成后会自动出现在这里。
@@ -335,6 +368,7 @@ export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?
                             depth={0}
                             selectedPath={selectedPath}
                             expandedKeys={expandedKeys}
+                            chapterStatusMap={chapterStatusMap}
                             onToggleFolder={(key) => {
                               setExpandedKeys((current) => {
                                 const next = new Set(current);

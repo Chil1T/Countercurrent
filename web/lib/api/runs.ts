@@ -11,6 +11,11 @@ export type ChapterProgress = {
   total_step_count: number;
   export_ready: boolean;
 };
+export type CourseResultsContext = {
+  course_id: string;
+  latest_run: RunSession | null;
+};
+
 
 export type RunSession = {
   id: string;
