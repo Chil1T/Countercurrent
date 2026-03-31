@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
@@ -121,6 +122,7 @@ class RunService:
                 id=f"run-{uuid4().hex[:8]}",
                 draft_id=draft.id,
                 course_id=draft.course_id,
+                created_at=datetime.now(timezone.utc).isoformat(),
                 status="created",
                 run_kind=run_kind,
                 backend=runtime_config.backend,
@@ -197,16 +199,15 @@ class RunService:
     def get_course_results_context(self, course_id: str):
         from server.app.models.run_session import CourseResultsContext
         latest_record: _RunRecord | None = None
-        latest_mtime: float = -1
+        latest_sort_key: tuple[float, str] | None = None
         
         for record in self._iter_records():
             if record.session.course_id != course_id or record.session.run_kind != "chapter":
                 continue
-                
-            path = self._record_path(record.session.id)
-            mtime = path.stat().st_mtime if path.exists() else 0
-            if mtime > latest_mtime:
-                latest_mtime = mtime
+
+            sort_key = self._record_sort_key(record)
+            if latest_sort_key is None or sort_key > latest_sort_key:
+                latest_sort_key = sort_key
                 latest_record = record
                 
         latest_run = None
@@ -218,6 +219,18 @@ class RunService:
             course_id=course_id,
             latest_run=latest_run,
         )
+
+    def _record_sort_key(self, record: _RunRecord) -> tuple[float, str]:
+        created_at = record.session.created_at
+        if created_at:
+            try:
+                return (datetime.fromisoformat(created_at).timestamp(), record.session.id)
+            except ValueError:
+                pass
+        path = self._record_path(record.session.id)
+        if path.exists():
+            return (path.stat().st_mtime, record.session.id)
+        return (0.0, record.session.id)
 
     def _refresh_run_record(self, record: _RunRecord, *, allow_auto_resume: bool) -> RunSession:
         snapshot = self._runner.snapshot(record.session.id)

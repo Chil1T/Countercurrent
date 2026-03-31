@@ -21,6 +21,7 @@ export type RunSession = {
   id: string;
   draft_id: string;
   course_id: string;
+  created_at: string | null;
   status: string;
   run_kind: "chapter" | "global";
   backend: string;

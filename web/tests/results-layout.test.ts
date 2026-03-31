@@ -27,12 +27,12 @@ test("results page keeps the preview header sticky while the preview body scroll
   assert.doesNotMatch(workbenchSource, /xl:-mt-6/);
 });
 
-test("results page wires runId into the workbench and uses run status for loading hints", () => {
+test("results page wires runId into the workbench and uses course latest run status for loading hints", () => {
   assert.match(
     pageSource,
     /<ResultsWorkbench courseId=\{courseId\} runId=\{resolvedSearchParams\.runId \?\? null\} \/>/,
   );
   assert.match(workbenchSource, /getRun/);
   assert.match(workbenchSource, /文件仍在生成中/);
-  assert.match(workbenchSource, /isArtifactTreeLoading\(run\?\.status\)/);
+  assert.match(workbenchSource, /isArtifactTreeLoading\(context\?\.latest_run\?\.status\)/);
 });

@@ -166,8 +166,8 @@ export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?
   const [reviewSummary, setReviewSummary] = useState<ReviewSummary | null>(null);
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
-  const [exportCompletedOnly, setExportCompletedOnly] = useState(true);
-  const [exportFinalOnly, setExportFinalOnly] = useState(true);
+  const [exportCompletedOnly, setExportCompletedOnly] = useState(false);
+  const [exportFinalOnly, setExportFinalOnly] = useState(false);
   const previousRunRef = useRef<RunSession | null>(null);
 
   useEffect(() => {
@@ -292,10 +292,10 @@ export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?
 
   const treeSections = useMemo(() => buildArtifactTree(nodes), [nodes]);
   const chapterStatusMap = useMemo(() => {
-    const activeChapterProgress = run?.chapter_progress ?? context?.latest_run?.chapter_progress ?? [];
+    const activeChapterProgress = context?.latest_run?.chapter_progress ?? [];
     return new Map(activeChapterProgress.map((c) => [c.chapter_id, c.status]));
-  }, [run?.chapter_progress, context?.latest_run?.chapter_progress]);
-  const loadingArtifacts = isArtifactTreeLoading(run?.status);
+  }, [context?.latest_run?.chapter_progress]);
+  const loadingArtifacts = isArtifactTreeLoading(context?.latest_run?.status);
   const previewContent = selectedPath ? content : null;
   const exportCacheBust = useMemo(
     () => `${nodes.length}-${reviewSummary?.report_count ?? 0}-${reviewSummary?.issue_count ?? 0}`,

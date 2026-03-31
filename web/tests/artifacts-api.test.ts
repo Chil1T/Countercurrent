@@ -34,6 +34,7 @@ test("RunSession type includes chapter_progress export readiness fields", () => 
     id: "run-123",
     draft_id: "draft-123",
     course_id: "demo-course",
+    created_at: "2026-03-30T12:00:00+00:00",
     status: "running",
     run_kind: "chapter",
     backend: "heuristic",

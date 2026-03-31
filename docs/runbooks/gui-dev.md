@@ -221,7 +221,7 @@ out/courses/<course_id>/runtime/llm_calls.jsonl
 默认行为：
 
 - 清理 `3000/8000` 监听端口
-- 后端使用 `python -m uvicorn server.app.main:app --host 127.0.0.1 --port 8000`
+- 后端会先解析 `PythonCommand` 的实际绝对路径并校验版本 `>= 3.10`，再使用该解释器启动 `uvicorn`
 - 前端使用 `npx next dev --hostname 127.0.0.1 --port 3000`
 - 日志写入 `out/_gui/backend-dev.log` 与 `out/_gui/frontend-dev.log`
 - 轮询 `healthz` 与 `/courses/new/input`，只有两者都返回 `200` 才算启动成功
@@ -244,6 +244,8 @@ out/courses/<course_id>/runtime/llm_calls.jsonl
 说明：
 
 - 默认 `WorkspaceRoot` 为脚本所在仓库根目录
+- 默认 `PythonCommand` 是裸 `python`；脚本当前会打印 `Resolved Python command` 和 `Resolved Python version`，便于确认实际使用的是哪一个解释器
+- 如果本机同时装了 `mise`、Anaconda、系统 Python 或其他发行版，请优先检查这里打印出来的解释器，而不是只看当前终端里的 `python --version`
 - `SkipBackendInstall` / `SkipFrontendInstall` 适合依赖已安装的重复启动
 - `NoCleanPorts` 适合你明确知道现有 `3000/8000` 服务应保留时使用
 - `DryRun` 只打印将执行的命令、日志路径和探活地址，不真正启动进程
@@ -327,19 +329,27 @@ npx next dev --hostname 127.0.0.1 --port 3000
 后端：
 
 ```powershell
-Start-Process cmd.exe -ArgumentList '/c','python -m uvicorn server.app.main:app --host 127.0.0.1 --port 8000 > out\_gui\backend-dev.log 2>&1' -WorkingDirectory (Get-Location)
+Start-Process powershell -ArgumentList @(
+  '-NoProfile',
+  '-Command',
+  "& 'python' -m uvicorn server.app.main:app --host 127.0.0.1 --port 8000 *> 'out\\_gui\\backend-dev.log'"
+) -WorkingDirectory (Get-Location)
 ```
 
 前端：
 
 ```powershell
-Start-Process cmd.exe -ArgumentList '/c','npx next dev --hostname 127.0.0.1 --port 3000 > ..\out\_gui\frontend-dev.log 2>&1' -WorkingDirectory (Join-Path (Get-Location) 'web')
+Start-Process powershell -ArgumentList @(
+  '-NoProfile',
+  '-Command',
+  "& 'npx' next dev --hostname 127.0.0.1 --port 3000 *> '..\\out\\_gui\\frontend-dev.log'"
+) -WorkingDirectory (Join-Path (Get-Location) 'web')
 ```
 
 说明：
 
-- `cmd /k` 适合人工盯日志，但关窗口就会停服务
-- `cmd /c ... > log 2>&1` 更适合后台常驻
+- `powershell -Command "& '<exe>' ... *> '<log>'"` 比 `cmd /c` 更稳，尤其当解释器路径自身带引号或空格时
+- 单独前台盯日志仍然优先用 `Standard Start`，不要把“后台常驻”当成默认路径
 - 不要把 `Start-Process` 的 `RedirectStandardOutput` 和 `RedirectStandardError` 指到同一个文件；PowerShell 会直接报错
 - 一键脚本当前不再依赖弹出式 `cmd.exe` 窗口托管服务，而是由 controller window 统一回收子进程
 
@@ -442,7 +452,7 @@ out/_gui/frontend-dev.log
   - `retry_history`：按尝试顺序记录每次 error/completed 与 `will_retry`
   - `last_error_kind`：最近一次失败尝试的错误类型；即使最终一次已成功，也可能保留最后一次 transient error 的种类
 - 结果页已接通 artifacts tree、文件预览、review 摘要和 ZIP 导出。
-- 结果页已暴露 artifacts API 的两类导出过滤参数（默认开启）：
+- 结果页已暴露 artifacts API 的两类导出过滤参数（默认关闭，需用户显式勾选）：
   - “只导出已完成章节”（`completed_chapters_only=true`）：只导出严格口径 `export_ready` 的章节作用域文件；课程根文件与非章节文件仍保留
   - “仅导出最终产物”（`final_outputs_only=true`）：只导出 `chapters/<chapter_id>/notebooklm/*`
 - 两个过滤参数同时存在时，结果是“严格 completed chapter”与“最终产物目录”的交集。

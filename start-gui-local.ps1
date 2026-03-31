@@ -223,18 +223,62 @@ function Quote-CmdArgument {
     return '"' + $Value.Replace('"', '""') + '"'
 }
 
+function Resolve-PythonCommandInfo {
+    param(
+        [string]$Command
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Command)) {
+        throw "PythonCommand cannot be empty."
+    }
+
+    $commandInfo = Get-Command $Command -ErrorAction Stop | Select-Object -First 1
+    $resolvedPath = $commandInfo.Source
+    if ([string]::IsNullOrWhiteSpace($resolvedPath)) {
+        $resolvedPath = $commandInfo.Path
+    }
+    if ([string]::IsNullOrWhiteSpace($resolvedPath)) {
+        throw "Failed to resolve Python command: $Command"
+    }
+
+    $versionOutput = (& $resolvedPath --version 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to inspect Python version from: $resolvedPath"
+    }
+
+    $match = [regex]::Match($versionOutput, 'Python\s+(?<major>\d+)\.(?<minor>\d+)(?:\.(?<patch>\d+))?')
+    if (-not $match.Success) {
+        throw "Failed to parse Python version from: $versionOutput"
+    }
+
+    $major = [int]$match.Groups["major"].Value
+    $minor = [int]$match.Groups["minor"].Value
+    $patch = if ($match.Groups["patch"].Success) { [int]$match.Groups["patch"].Value } else { 0 }
+
+    if ($major -lt 3 -or ($major -eq 3 -and $minor -lt 10)) {
+        throw "GUI local start requires Python 3.10+; resolved $resolvedPath -> $versionOutput"
+    }
+
+    return [PSCustomObject]@{
+        Path    = $resolvedPath
+        Version = "$major.$minor.$patch"
+        Raw     = $versionOutput
+    }
+}
+
 function Start-HiddenTrackedProcess {
     param(
         [string]$WorkingDirectory,
-        [string]$CommandLine,
+        [string]$FilePath,
+        [string]$Arguments,
         [string]$Name
     )
 
     Initialize-ChildProcessJob
 
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
-    $startInfo.FileName = "cmd.exe"
-    $startInfo.Arguments = "/d /c $CommandLine"
+    $startInfo.FileName = $FilePath
+    $startInfo.Arguments = $Arguments
     $startInfo.WorkingDirectory = $WorkingDirectory
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
@@ -328,6 +372,10 @@ try {
     Write-Host "Backend health: $backendHealthUrl"
     Write-Host "Frontend health: $frontendHealthUrl"
 
+    $pythonInfo = Resolve-PythonCommandInfo -Command $PythonCommand
+    Write-Host "Resolved Python command: $($pythonInfo.Path)"
+    Write-Host "Resolved Python version: $($pythonInfo.Raw)"
+
     if (-not $NoCleanPorts) {
         Write-Host "Cleaning ports: $BackendPort, $FrontendPort"
         if (-not $DryRun) {
@@ -335,17 +383,24 @@ try {
         }
     }
 
-    $backendInstallCommand = "& $(Quote-CommandSegment $PythonCommand) -m pip install -r $(Quote-CommandSegment (Join-Path $workspace 'server\\requirements.txt'))"
+    $resolvedPythonCommand = $pythonInfo.Path
+    $backendPythonForCmd = Quote-CmdArgument $resolvedPythonCommand
+    $backendInstallCommand = "& $(Quote-CommandSegment $resolvedPythonCommand) -m pip install -r $(Quote-CommandSegment (Join-Path $workspace 'server\\requirements.txt'))"
     $frontendInstallCommand = "& $(Quote-CommandSegment $NpmCommand) install"
-    $backendRuntimeCommand = "$PythonCommand -m uvicorn server.app.main:app --host $BindHost --port $BackendPort"
+    $backendRuntimeCommand = "$backendPythonForCmd -m uvicorn server.app.main:app --host $BindHost --port $BackendPort"
     $frontendRuntimeCommand = "$NpxCommand next dev --hostname $BindHost --port $FrontendPort"
     $backendStartCommand = "$backendRuntimeCommand > $(Quote-CmdArgument $backendLog) 2>&1"
     $frontendStartCommand = "$frontendRuntimeCommand > $(Quote-CmdArgument $frontendLog) 2>&1"
+    $backendShellCommand = "& $(Quote-CommandSegment $resolvedPythonCommand) -m uvicorn server.app.main:app --host $BindHost --port $BackendPort *> $(Quote-CommandSegment $backendLog)"
+    $frontendShellCommand = "& $(Quote-CommandSegment $NpxCommand) next dev --hostname $BindHost --port $FrontendPort *> $(Quote-CommandSegment $frontendLog)"
+    $hiddenShell = "powershell.exe"
+    $backendHiddenArguments = "-NoProfile -ExecutionPolicy Bypass -Command $(Quote-CmdArgument $backendShellCommand)"
+    $frontendHiddenArguments = "-NoProfile -ExecutionPolicy Bypass -Command $(Quote-CmdArgument $frontendShellCommand)"
 
     if (-not $SkipBackendInstall) {
         Write-Host "Backend install command: $backendInstallCommand"
         if (-not $DryRun) {
-            & $PythonCommand -m pip install -r (Join-Path $workspace "server\requirements.txt")
+            & $resolvedPythonCommand -m pip install -r (Join-Path $workspace "server\requirements.txt")
         }
     }
 
@@ -372,12 +427,14 @@ try {
 
     $backendProcess = Start-HiddenTrackedProcess `
         -WorkingDirectory $workspace `
-        -CommandLine $backendStartCommand `
+        -FilePath $hiddenShell `
+        -Arguments $backendHiddenArguments `
         -Name "backend"
 
     $frontendProcess = Start-HiddenTrackedProcess `
         -WorkingDirectory $webRoot `
-        -CommandLine $frontendStartCommand `
+        -FilePath $hiddenShell `
+        -Arguments $frontendHiddenArguments `
         -Name "frontend"
 
     Wait-Http200 -Url $backendHealthUrl -TimeoutSeconds $HealthTimeoutSeconds

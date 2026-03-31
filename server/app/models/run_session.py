@@ -29,6 +29,7 @@ class RunSession(BaseModel):
     id: str
     draft_id: str
     course_id: str
+    created_at: str | None = None
     status: str
     run_kind: Literal["chapter", "global"] = "chapter"
     backend: str = "heuristic"

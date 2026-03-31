@@ -12,6 +12,11 @@ test("results workbench includes an explicit UI toggle for filtered export", () 
   assert.match(workbenchSource, /finalOutputsOnly: exportFinalOnly/);
 });
 
+test("results workbench keeps full export as the default behavior", () => {
+  assert.match(workbenchSource, /const \[exportCompletedOnly, setExportCompletedOnly\] = useState\(false\)/);
+  assert.match(workbenchSource, /const \[exportFinalOnly, setExportFinalOnly\] = useState\(false\)/);
+});
+
 test("results workbench preserves selection and expansion rather than blindly expanding all", () => {
   // It shouldn't force collectTreeSectionKeys(nextTree) on SSE update anymore
   assert.doesNotMatch(workbenchSource, /setExpandedKeys\(\(current\) => new Set\(\[\.\.\.current, \.\.\.nextExpandedKeys\]\)\)/);
