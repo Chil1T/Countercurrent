@@ -4,10 +4,10 @@ import assert from "node:assert/strict";
 import {
   buildContextSections,
   type ContextSection,
-} from "../lib/context-panel";
-import type { CourseDraft } from "../lib/api/course-drafts";
-import type { RunSession } from "../lib/api/runs";
-import type { ReviewSummary } from "../lib/api/artifacts";
+} from "../lib/context-panel.ts";
+import type { CourseDraft } from "../lib/api/course-drafts.ts";
+import type { RunSession } from "../lib/api/runs.ts";
+import type { ReviewSummary } from "../lib/api/artifacts.ts";
 
 function pickSection(sections: ContextSection[], title: string): ContextSection {
   const section = sections.find((candidate) => candidate.title === title);

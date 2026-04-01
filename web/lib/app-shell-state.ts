@@ -65,10 +65,6 @@ function buildRunHref(
   courseId: string | null,
   searchParams?: SearchParamsLike,
 ): string | null {
-  if (!runId) {
-    return null;
-  }
-
   const params = new URLSearchParams();
   const draftId = searchParams?.get("draftId");
   const resolvedCourseId = searchParams?.get("courseId") ?? courseId;
@@ -80,9 +76,8 @@ function buildRunHref(
   }
 
   const query = params.toString();
-  return query
-    ? `/runs/${encodeURIComponent(runId)}?${query}`
-    : `/runs/${encodeURIComponent(runId)}`;
+  const path = runId ? `/runs/${encodeURIComponent(runId)}` : "/runs";
+  return query ? `${path}?${query}` : path;
 }
 
 function buildResultsHref(
@@ -90,10 +85,6 @@ function buildResultsHref(
   runId: string | null,
   searchParams?: SearchParamsLike,
 ): string | null {
-  if (!courseId) {
-    return null;
-  }
-
   const params = new URLSearchParams();
   const draftId = searchParams?.get("draftId");
   const resolvedRunId = searchParams?.get("runId") ?? runId;
@@ -105,9 +96,8 @@ function buildResultsHref(
   }
 
   const query = params.toString();
-  return query
-    ? `/courses/${encodeURIComponent(courseId)}/results?${query}`
-    : `/courses/${encodeURIComponent(courseId)}/results`;
+  const path = courseId ? `/courses/${encodeURIComponent(courseId)}/results` : "/courses/results";
+  return query ? `${path}?${query}` : path;
 }
 
 export function buildAppShellState(
@@ -131,10 +121,10 @@ export function buildAppShellState(
     if (pathname.startsWith("/courses/new/config")) {
       return "Config";
     }
-    if (pathname.startsWith("/runs/")) {
+    if (pathname === "/runs" || pathname.startsWith("/runs/")) {
       return "Run";
     }
-    if (pathname.includes("/results")) {
+    if (pathname === "/courses/results" || pathname.includes("/results")) {
       return "Results";
     }
     return "Draft";
@@ -163,14 +153,14 @@ export function buildAppShellState(
         label: "运行",
         hint: "阶段状态与数据通路",
         href: buildRunHref(runId, courseId, searchParams),
-        enabled: !!runId,
+        enabled: true,
       },
       {
         step: "04",
         label: "结果",
         hint: "文件树、预览、导出",
         href: buildResultsHref(courseId, runId, searchParams),
-        enabled: !!courseId,
+        enabled: true,
       },
     ],
   };

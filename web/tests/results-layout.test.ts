@@ -30,7 +30,7 @@ test("results page keeps the preview header sticky while the preview body scroll
 test("results page wires runId into the workbench and uses course latest run status for loading hints", () => {
   assert.match(
     pageSource,
-    /<ResultsWorkbench courseId=\{courseId\} runId=\{resolvedSearchParams\.runId \?\? null\} \/>/,
+    /<ResultsWorkbench[\s\S]*courseId=\{courseId\}[\s\S]*runId=\{resolvedSearchParams\.runId \?\? null\}[\s\S]*preview=\{preview\}[\s\S]*\/>/,
   );
   assert.match(workbenchSource, /getRun/);
   assert.match(workbenchSource, /文件仍在生成中/);

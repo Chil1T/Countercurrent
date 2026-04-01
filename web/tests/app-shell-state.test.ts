@@ -5,13 +5,13 @@ import { resolve } from "node:path";
 
 import { buildAppShellState } from "../lib/app-shell-state.ts";
 
-test("input page state does not expose demo run or result links", () => {
+test("input page now routes run and result navigation to empty workbenches", () => {
   const state = buildAppShellState("/courses/new/input", new URLSearchParams());
 
-  assert.equal(state.navItems[2]?.href, null);
-  assert.equal(state.navItems[2]?.enabled, false);
-  assert.equal(state.navItems[3]?.href, null);
-  assert.equal(state.navItems[3]?.enabled, false);
+  assert.equal(state.navItems[2]?.href, "/runs");
+  assert.equal(state.navItems[2]?.enabled, true);
+  assert.equal(state.navItems[3]?.href, "/courses/results");
+  assert.equal(state.navItems[3]?.enabled, true);
 });
 
 test("config page preserves the active draft id in the config link", () => {
@@ -22,6 +22,8 @@ test("config page preserves the active draft id in the config link", () => {
 
   assert.equal(state.navItems[0]?.href, "/courses/new/input?draftId=draft-1234");
   assert.equal(state.navItems[1]?.href, "/courses/new/config?draftId=draft-1234");
+  assert.equal(state.navItems[2]?.href, "/runs?draftId=draft-1234");
+  assert.equal(state.navItems[3]?.href, "/courses/results?draftId=draft-1234");
 });
 
 test("config page keeps run and result links available when run context exists", () => {
@@ -48,6 +50,22 @@ test("config page keeps run and result links available when run context exists",
     "/courses/database-course/results?draftId=draft-1234&runId=run-5678",
   );
   assert.equal(state.navItems[3]?.enabled, true);
+});
+
+test("empty run and result routes preserve draft context without inventing preview ids", () => {
+  const runState = buildAppShellState(
+    "/runs",
+    new URLSearchParams("draftId=draft-1234&courseId=database-course"),
+  );
+  const resultsState = buildAppShellState(
+    "/courses/results",
+    new URLSearchParams("draftId=draft-1234&courseId=database-course"),
+  );
+
+  assert.equal(runState.navItems[2]?.href, "/runs?draftId=draft-1234&courseId=database-course");
+  assert.equal(runState.navItems[3]?.href, "/courses/database-course/results?draftId=draft-1234");
+  assert.equal(resultsState.navItems[2]?.href, "/runs?draftId=draft-1234&courseId=database-course");
+  assert.equal(resultsState.navItems[3]?.href, "/courses/database-course/results?draftId=draft-1234");
 });
 
 test("run page keeps the real run route instead of demo placeholders", () => {
@@ -123,7 +141,7 @@ test("app shell uses top sticky navigation with a fixed right summary rail", () 
     "utf-8",
   );
 
-  assert.equal(appShellSource.includes("步骤导航"), true);
+  assert.equal(appShellSource.includes("<nav"), true);
   assert.equal(appShellSource.includes("sticky top-0 z-40"), true);
   assert.equal(appShellSource.includes("xl:grid-cols-[minmax(0,1fr)_320px]"), true);
   assert.equal(appShellSource.includes("sticky top-24"), true);

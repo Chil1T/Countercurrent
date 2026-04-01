@@ -431,177 +431,115 @@ export function TemplateConfigWorkbench() {
           </div>
         </div>
 
-        <div className="rounded-[28px] border border-stone-200 bg-white p-5 xl:p-6">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <h3 className="text-xl font-semibold">运行后端默认值</h3>
-              <p className="mt-2 text-sm leading-7 text-stone-500">
-                保存到本机 GUI 配置文件。当前版本密钥以仓库外本地明文方式保存。
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => void handleSaveRuntimeDefaults()}
-              disabled={isSavingRuntimeDefaults}
-              className="rounded-full border border-stone-300 px-5 py-3 text-sm font-medium text-stone-700 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:border-stone-200 disabled:text-stone-400"
-            >
-              {isSavingRuntimeDefaults ? "保存中..." : "保存默认值"}
-            </button>
-          </div>
-
-          <div className={fieldCardClass}>
-            <div className={fieldLabelClass}>默认 provider</div>
-            <div className={helperTextClass}>选择新课程默认使用哪类后端。后面的表单会随此选项切换。</div>
-            <select
-              value={defaultProvider}
-              onChange={(event) => setDefaultProvider(event.target.value as ProviderName)}
-              className={selectClass}
-            >
-              <option value="heuristic">heuristic</option>
-              <option value="openai">OpenAI</option>
-              <option value="openai_compatible">OpenAI-compatible</option>
-              <option value="anthropic">Anthropic</option>
-            </select>
-          </div>
-
-          <div className="mt-5 space-y-4">
-            {defaultProvider === "heuristic" ? (
-              <div className={fieldCardClass}>
-                <div className={fieldLabelClass}>heuristic 默认配置</div>
-                <div className="mt-3 rounded-2xl border border-dashed border-stone-300 bg-white px-4 py-4 text-sm leading-7 text-stone-600">
-                  heuristic 使用本地启发式流程，不需要填写 API key、模型或 base URL。
-                </div>
-              </div>
-            ) : (
-              <div className={fieldCardClass}>
-                <div className={fieldLabelClass}>{providerLabel(defaultProvider)} 默认配置</div>
-                <div className={helperTextClass}>
-                  这里只显示当前默认 provider 的连接信息，切换 provider 会切换到对应卡片。
-                </div>
-                <div className="mt-4 grid gap-3 md:grid-cols-2">
-                  <label className="text-sm text-stone-700">
-                    <div className={fieldLabelClass}>API key</div>
-                    <div className={helperTextClass}>用于调用所选服务商的密钥。</div>
-                    <input
-                      value={activeDefaultProviderSettings?.api_key ?? ""}
-                      onChange={(event) => updateProviderSettings(defaultProvider, "api_key", event.target.value)}
-                      placeholder="粘贴服务商提供的 API key"
-                      className={inputClass}
-                    />
-                  </label>
-                  <label className="text-sm text-stone-700">
-                    <div className={fieldLabelClass}>Base URL</div>
-                    <div className={helperTextClass}>只有自定义网关时才需要填写，官方地址可留空。</div>
-                    <input
-                      value={activeDefaultProviderSettings?.base_url ?? ""}
-                      onChange={(event) => updateProviderSettings(defaultProvider, "base_url", event.target.value)}
-                      placeholder={
-                        defaultProvider === "openai_compatible"
-                          ? "例如：https://openrouter.ai/api/v1/chat/completions"
-                          : "留空使用官方默认地址"
-                      }
-                      className={inputClass}
-                    />
-                  </label>
-                  <label className="text-sm text-stone-700">
-                    <div className={fieldLabelClass}>简单任务模型</div>
-                    <div className={helperTextClass}>适合术语、摘要等轻量步骤。</div>
-                    <input
-                      value={activeDefaultProviderSettings?.simple_model ?? ""}
-                      onChange={(event) => updateProviderSettings(defaultProvider, "simple_model", event.target.value)}
-                      placeholder="例如：gpt-4.1-mini"
-                      className={inputClass}
-                    />
-                  </label>
-                  <label className="text-sm text-stone-700">
-                    <div className={fieldLabelClass}>复杂任务模型</div>
-                    <div className={helperTextClass}>适合写作、整合和推理更重的步骤。</div>
-                    <input
-                      value={activeDefaultProviderSettings?.complex_model ?? ""}
-                      onChange={(event) => updateProviderSettings(defaultProvider, "complex_model", event.target.value)}
-                      placeholder="例如：gpt-5.4"
-                      className={inputClass}
-                    />
-                  </label>
-                  <label className="text-sm text-stone-700 md:col-span-2">
-                    <div className={fieldLabelClass}>请求超时（秒）</div>
-                    <div className={helperTextClass}>控制单次模型请求最多等待多久，不是整次运行总时长。</div>
-                    <input
-                      value={activeDefaultProviderSettings?.timeout_seconds ?? ""}
-                      onChange={(event) => updateProviderSettings(defaultProvider, "timeout_seconds", event.target.value)}
-                      placeholder="例如：180"
-                      className={inputClass}
-                    />
-                  </label>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        <details className="rounded-[28px] border border-stone-200 bg-white p-5 xl:p-6">
+        <details
+          className="rounded-[28px] border border-stone-200 bg-white p-5 xl:p-6"
+          open={configWorkbenchLayout.runtimeDefaultsDefaultOpen}
+        >
           <summary className="cursor-pointer list-none text-xl font-semibold text-stone-900">
-            {configWorkbenchCopy.advancedSettingsSummary}
+            {configWorkbenchCopy.runtimeDefaultsTitle}
           </summary>
-          <div className="mt-5 rounded-[24px] border border-stone-200 bg-stone-50 p-5">
-            <h3 className="text-xl font-semibold">{configWorkbenchCopy.courseOverridesTitle}</h3>
-            <p className="mt-2 text-sm leading-7 text-stone-500">{configWorkbenchCopy.courseOverridesHelpText}</p>
-            <div className="mt-5 grid gap-4 md:grid-cols-2">
-              <label className={fieldCardClass}>
-                <div className={fieldLabelClass}>provider 覆盖</div>
-                <div className={helperTextClass}>只在这门课临时改后端时填写；留空会继承上面的默认值。</div>
-                <select
-                  value={courseProvider}
-                  onChange={(event) => setCourseProvider(event.target.value)}
-                  className={selectClass}
-                >
-                  <option value="">继承全局默认值</option>
-                  <option value="heuristic">heuristic</option>
-                  <option value="openai">OpenAI</option>
-                  <option value="openai_compatible">OpenAI-compatible</option>
-                  <option value="anthropic">Anthropic</option>
-                </select>
-              </label>
-              <label className={fieldCardClass}>
-                <div className={fieldLabelClass}>Base URL 覆盖</div>
-                <div className={helperTextClass}>只有这门课需要走特殊网关时才填写。</div>
-                <input
-                  value={courseBaseUrl}
-                  onChange={(event) => setCourseBaseUrl(event.target.value)}
-                  placeholder="留空继承默认地址"
-                  className={inputClass}
-                />
-              </label>
-              <label className={fieldCardClass}>
-                <div className={fieldLabelClass}>简单任务模型覆盖</div>
-                <div className={helperTextClass}>只改这门课的轻量步骤模型。</div>
-                <input
-                  value={courseSimpleModel}
-                  onChange={(event) => setCourseSimpleModel(event.target.value)}
-                  placeholder="留空继承默认 simple model"
-                  className={inputClass}
-                />
-              </label>
-              <label className={fieldCardClass}>
-                <div className={fieldLabelClass}>复杂任务模型覆盖</div>
-                <div className={helperTextClass}>只改这门课的重度生成模型。</div>
-                <input
-                  value={courseComplexModel}
-                  onChange={(event) => setCourseComplexModel(event.target.value)}
-                  placeholder="留空继承默认 complex model"
-                  className={inputClass}
-                />
-              </label>
-              <label className={`${fieldCardClass} md:col-span-2`}>
-                <div className={fieldLabelClass}>请求超时覆盖（秒）</div>
-                <div className={helperTextClass}>只影响这门课的单次模型请求等待时间。</div>
-                <input
-                  value={courseTimeoutSeconds}
-                  onChange={(event) => setCourseTimeoutSeconds(event.target.value)}
-                  placeholder="留空继承默认超时，例如 180"
-                  className={inputClass}
-                />
-              </label>
+          <div className="mt-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <p className="text-sm leading-7 text-stone-500">
+                {configWorkbenchCopy.runtimeDefaultsHelpText}
+              </p>
+              <button
+                type="button"
+                onClick={() => void handleSaveRuntimeDefaults()}
+                disabled={isSavingRuntimeDefaults}
+                className="rounded-full border border-stone-300 px-5 py-3 text-sm font-medium text-stone-700 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:border-stone-200 disabled:text-stone-400"
+              >
+                {isSavingRuntimeDefaults ? "保存中..." : "保存默认值"}
+              </button>
+            </div>
+
+            <div className={`mt-5 ${fieldCardClass}`}>
+              <div className={fieldLabelClass}>默认 provider</div>
+              <div className={helperTextClass}>选择新课程默认使用哪类后端。后面的表单会随此选项切换。</div>
+              <select
+                value={defaultProvider}
+                onChange={(event) => setDefaultProvider(event.target.value as ProviderName)}
+                className={selectClass}
+              >
+                <option value="heuristic">heuristic</option>
+                <option value="openai">OpenAI</option>
+                <option value="openai_compatible">OpenAI-compatible</option>
+                <option value="anthropic">Anthropic</option>
+              </select>
+            </div>
+
+            <div className="mt-5 space-y-4">
+              {defaultProvider === "heuristic" ? (
+                <div className={fieldCardClass}>
+                  <div className={fieldLabelClass}>heuristic 默认配置</div>
+                  <div className="mt-3 rounded-2xl border border-dashed border-stone-300 bg-white px-4 py-4 text-sm leading-7 text-stone-600">
+                    heuristic 使用本地启发式流程，不需要填写 API key、模型或 base URL。
+                  </div>
+                </div>
+              ) : (
+                <div className={fieldCardClass}>
+                  <div className={fieldLabelClass}>{providerLabel(defaultProvider)} 默认配置</div>
+                  <div className={helperTextClass}>
+                    这里只显示当前默认 provider 的连接信息，切换 provider 会切换到对应卡片。
+                  </div>
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    <label className="text-sm text-stone-700">
+                      <div className={fieldLabelClass}>API key</div>
+                      <div className={helperTextClass}>用于调用所选服务商的密钥。</div>
+                      <input
+                        value={activeDefaultProviderSettings?.api_key ?? ""}
+                        onChange={(event) => updateProviderSettings(defaultProvider, "api_key", event.target.value)}
+                        placeholder="粘贴服务商提供的 API key"
+                        className={inputClass}
+                      />
+                    </label>
+                    <label className="text-sm text-stone-700">
+                      <div className={fieldLabelClass}>Base URL</div>
+                      <div className={helperTextClass}>只有自定义网关时才需要填写，官方地址可留空。</div>
+                      <input
+                        value={activeDefaultProviderSettings?.base_url ?? ""}
+                        onChange={(event) => updateProviderSettings(defaultProvider, "base_url", event.target.value)}
+                        placeholder={
+                          defaultProvider === "openai_compatible"
+                            ? "例如：https://openrouter.ai/api/v1/chat/completions"
+                            : "留空使用官方默认地址"
+                        }
+                        className={inputClass}
+                      />
+                    </label>
+                    <label className="text-sm text-stone-700">
+                      <div className={fieldLabelClass}>简单任务模型</div>
+                      <div className={helperTextClass}>适合术语、摘要等轻量步骤。</div>
+                      <input
+                        value={activeDefaultProviderSettings?.simple_model ?? ""}
+                        onChange={(event) => updateProviderSettings(defaultProvider, "simple_model", event.target.value)}
+                        placeholder="例如：gpt-4.1-mini"
+                        className={inputClass}
+                      />
+                    </label>
+                    <label className="text-sm text-stone-700">
+                      <div className={fieldLabelClass}>复杂任务模型</div>
+                      <div className={helperTextClass}>适合写作、整合和推理更重的步骤。</div>
+                      <input
+                        value={activeDefaultProviderSettings?.complex_model ?? ""}
+                        onChange={(event) => updateProviderSettings(defaultProvider, "complex_model", event.target.value)}
+                        placeholder="例如：gpt-5.4"
+                        className={inputClass}
+                      />
+                    </label>
+                    <label className="text-sm text-stone-700 md:col-span-2">
+                      <div className={fieldLabelClass}>请求超时（秒）</div>
+                      <div className={helperTextClass}>控制单次模型请求最多等待多久，不是整次运行总时长。</div>
+                      <input
+                        value={activeDefaultProviderSettings?.timeout_seconds ?? ""}
+                        onChange={(event) => updateProviderSettings(defaultProvider, "timeout_seconds", event.target.value)}
+                        placeholder="例如：180"
+                        className={inputClass}
+                      />
+                    </label>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </details>

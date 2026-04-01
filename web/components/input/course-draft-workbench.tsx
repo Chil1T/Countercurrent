@@ -10,7 +10,6 @@ import {
 } from "@/lib/api/course-drafts";
 
 const defaultSlots = [
-  { kind: "course_link", label: "课程链接", supported: true, count: 0 },
   { kind: "subtitle", label: "字幕", supported: true, count: 0 },
   { kind: "audio_video", label: "音视频", supported: false, count: 0 },
   { kind: "courseware", label: "课件", supported: false, count: 0 },
@@ -25,7 +24,6 @@ export function CourseDraftWorkbench({
   const router = useRouter();
   const subtitleFileInputRef = useRef<HTMLInputElement | null>(null);
   const [bookTitle, setBookTitle] = useState("");
-  const [courseUrl, setCourseUrl] = useState("");
   const [uploadedSubtitleFiles, setUploadedSubtitleFiles] = useState<File[]>([]);
   const [subtitleAssets, setSubtitleAssets] = useState([
     { filename: "chapter-01.md", content: "" },
@@ -52,7 +50,6 @@ export function CourseDraftWorkbench({
         }
         setDraft(nextDraft);
         setBookTitle(nextDraft.book_title);
-        setCourseUrl(nextDraft.course_url ?? "");
         setError(null);
       } catch (loadError) {
         if (!cancelled) {
@@ -77,9 +74,6 @@ export function CourseDraftWorkbench({
       const preparedSubtitleAssets = subtitleAssets.filter((asset) => asset.content.trim().length > 0);
       const formData = new FormData();
       formData.append("book_title", bookTitle);
-      if (courseUrl) {
-        formData.append("course_url", courseUrl);
-      }
       for (const file of uploadedSubtitleFiles) {
         formData.append("subtitle_files", file, file.name);
       }
@@ -93,7 +87,6 @@ export function CourseDraftWorkbench({
           ? await createCourseDraft(formData)
           : await createCourseDraft({
               book_title: bookTitle,
-            course_url: courseUrl || undefined,
             });
       setDraft(nextDraft);
       router.replace(`/courses/new/input?draftId=${nextDraft.id}`);
@@ -106,7 +99,7 @@ export function CourseDraftWorkbench({
     }
   }
 
-  const slots = draft?.input_slots ?? defaultSlots;
+  const slots = (draft?.input_slots ?? defaultSlots).filter((slot) => slot.kind !== "course_link");
 
   return (
     <section className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_340px]">
@@ -116,7 +109,7 @@ export function CourseDraftWorkbench({
       >
         <h3 className="text-xl font-semibold">素材输入分区</h3>
         <p className="mt-2 text-sm leading-7 text-stone-600">
-          第一条可执行闭环现在接通了教材名、课程链接和文件感知的字幕资产；其他模态分区继续保留占位。
+          第一条可执行闭环现在接通了教材名和文件感知的字幕资产；其他模态分区继续保留占位。
         </p>
 
         <div className="mt-5 grid gap-4">
@@ -127,16 +120,6 @@ export function CourseDraftWorkbench({
               onChange={(event) => setBookTitle(event.target.value)}
               required
               placeholder="例如：Database System Concepts"
-              className="mt-3 w-full border-none bg-transparent text-sm text-stone-800 outline-none"
-            />
-          </label>
-
-          <label className="rounded-2xl border border-stone-200 bg-white px-4 py-4">
-            <div className="text-sm font-medium text-stone-700">课程链接</div>
-            <input
-              value={courseUrl}
-              onChange={(event) => setCourseUrl(event.target.value)}
-              placeholder="https://example.com/course"
               className="mt-3 w-full border-none bg-transparent text-sm text-stone-800 outline-none"
             />
           </label>
@@ -313,7 +296,6 @@ export function CourseDraftWorkbench({
               {draft ? ` ${draft.detected.asset_completeness}%` : " 0%"}
             </li>
             <li>运行就绪：{draft?.runtime_ready ? "已就绪" : "未就绪"}</li>
-            <li>课程链接：{draft?.course_url ?? "未提供"}</li>
           </ul>
         </div>
       </div>

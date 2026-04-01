@@ -21,6 +21,7 @@ import {
   type ArtifactTreeNode,
   type ArtifactTreeSection,
 } from "@/lib/results-view";
+import type { ResultsWorkbenchPreview } from "@/lib/preview/workbench";
 
 function collectExpandableKeys(nodes: ArtifactTreeNode[]): string[] {
   const keys: string[] = [];
@@ -157,20 +158,38 @@ function TreeNode({
   );
 }
 
-export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?: string | null }) {
-  const [nodes, setNodes] = useState<ArtifactNode[]>([]);
-  const [run, setRun] = useState<RunSession | null>(null);
-  const [context, setContext] = useState<CourseResultsContext | null>(null);
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const [content, setContent] = useState<ArtifactContent | null>(null);
-  const [reviewSummary, setReviewSummary] = useState<ReviewSummary | null>(null);
-  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() => new Set());
+export function ResultsWorkbench({
+  courseId,
+  runId,
+  preview,
+}: {
+  courseId: string;
+  runId?: string | null;
+  preview?: ResultsWorkbenchPreview | null;
+}) {
+  const isPreview = !!preview;
+  const initialPreviewTree = preview ? buildArtifactTree(preview.nodes) : [];
+  const initialPreviewPath = preview ? (findFirstSelectablePath(initialPreviewTree) ?? null) : null;
+  const [nodes, setNodes] = useState<ArtifactNode[]>(preview?.nodes ?? []);
+  const [run, setRun] = useState<RunSession | null>(preview?.run ?? null);
+  const [context, setContext] = useState<CourseResultsContext | null>(preview?.context ?? null);
+  const [selectedPath, setSelectedPath] = useState<string | null>(initialPreviewPath);
+  const [content, setContent] = useState<ArtifactContent | null>(
+    initialPreviewPath && preview ? (preview.contentByPath[initialPreviewPath] ?? null) : null,
+  );
+  const [reviewSummary, setReviewSummary] = useState<ReviewSummary | null>(preview?.reviewSummary ?? null);
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(
+    () => new Set(preview ? collectTreeSectionKeys(initialPreviewTree) : []),
+  );
   const [error, setError] = useState<string | null>(null);
   const [exportCompletedOnly, setExportCompletedOnly] = useState(false);
   const [exportFinalOnly, setExportFinalOnly] = useState(false);
   const previousRunRef = useRef<RunSession | null>(null);
 
   useEffect(() => {
+    if (preview) {
+      return;
+    }
     let cancelled = false;
 
     async function refreshArtifacts(preserveSelection: boolean) {
@@ -213,9 +232,12 @@ export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?
     return () => {
       cancelled = true;
     };
-  }, [courseId, runId]);
+  }, [courseId, preview, runId]);
 
   useEffect(() => {
+    if (preview) {
+      return;
+    }
     let cancelled = false;
     if (!runId) {
       return () => {
@@ -261,9 +283,12 @@ export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?
       cancelled = true;
       unsubscribe();
     };
-  }, [courseId, runId]);
+  }, [courseId, preview, runId]);
 
   useEffect(() => {
+    if (preview) {
+      return;
+    }
     let cancelled = false;
     if (!selectedPath) {
       return;
@@ -288,15 +313,19 @@ export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?
     return () => {
       cancelled = true;
     };
-  }, [courseId, selectedPath]);
+  }, [courseId, preview, selectedPath]);
 
   const treeSections = useMemo(() => buildArtifactTree(nodes), [nodes]);
   const chapterStatusMap = useMemo(() => {
     const activeChapterProgress = context?.latest_run?.chapter_progress ?? [];
     return new Map(activeChapterProgress.map((c) => [c.chapter_id, c.status]));
   }, [context?.latest_run?.chapter_progress]);
-  const loadingArtifacts = isArtifactTreeLoading(context?.latest_run?.status);
-  const previewContent = selectedPath ? content : null;
+  const loadingArtifacts = isPreview ? false : isArtifactTreeLoading(context?.latest_run?.status);
+  const previewContent = selectedPath
+    ? isPreview
+      ? (preview?.contentByPath[selectedPath] ?? null)
+      : content
+    : null;
   const exportCacheBust = useMemo(
     () => `${nodes.length}-${reviewSummary?.report_count ?? 0}-${reviewSummary?.issue_count ?? 0}`,
     [nodes.length, reviewSummary?.issue_count, reviewSummary?.report_count],
@@ -315,6 +344,12 @@ export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?
       <div className="min-w-0 grid gap-5 xl:sticky xl:top-24 xl:h-[calc(100vh-8.5rem)] xl:grid-rows-[minmax(0,1fr)_auto]">
         <div className="flex min-h-0 flex-col rounded-[28px] border border-stone-200 bg-stone-50 p-5">
           <h3 className="shrink-0 text-lg font-semibold">文件树</h3>
+          {preview ? (
+            <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-xs text-sky-800">
+              <span className="font-medium uppercase tracking-[0.18em]">Preview</span>
+              <span className="ml-2 text-sky-700">当前为 {preview.scenario} 示例态，不会请求真实结果接口。</span>
+            </div>
+          ) : null}
           {runId && run ? (
             <div className="mt-4 rounded-xl border border-stone-200 bg-stone-100 px-4 py-2.5 text-xs text-stone-600">
               <span className="font-medium text-stone-800">Scoped view</span>: Viewing Run {run.id.slice(0, 8)} ({run.status})
@@ -430,6 +465,7 @@ export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?
                   type="checkbox"
                   checked={exportCompletedOnly}
                   onChange={(e) => setExportCompletedOnly(e.target.checked)}
+                  disabled={isPreview}
                   className="rounded border-stone-600 bg-[#15120f] text-stone-900 focus:ring-stone-400 focus:ring-offset-[#15120f]"
                 />
                 <span className="select-none text-sm">只导出已完成章节</span>
@@ -439,22 +475,36 @@ export function ResultsWorkbench({ courseId, runId }: { courseId: string; runId?
                   type="checkbox"
                   checked={exportFinalOnly}
                   onChange={(e) => setExportFinalOnly(e.target.checked)}
+                  disabled={isPreview}
                   className="rounded border-stone-600 bg-[#15120f] text-stone-900 focus:ring-stone-400 focus:ring-offset-[#15120f]"
                 />
                 <span className="select-none text-sm">仅导出最终产物 (排除中间数据)</span>
               </label>
             </div>
             <div className="pt-2">
-              <a
-                href={buildExportUrl(courseId, {
-                  cacheBust: exportCacheBust,
-                  completedChaptersOnly: exportCompletedOnly,
-                  finalOutputsOnly: exportFinalOnly,
-                })}
-                className="inline-flex rounded-full bg-white px-5 py-3 text-sm font-medium text-stone-900 transition hover:bg-stone-200"
-              >
-                导出 ZIP
-              </a>
+              {preview ? (
+                <button
+                  type="button"
+                  disabled
+                  className="inline-flex cursor-not-allowed rounded-full bg-stone-300 px-5 py-3 text-sm font-medium text-stone-700"
+                >
+                  导出 ZIP
+                </button>
+              ) : (
+                <a
+                  href={buildExportUrl(courseId, {
+                    cacheBust: exportCacheBust,
+                    completedChaptersOnly: exportCompletedOnly,
+                    finalOutputsOnly: exportFinalOnly,
+                  })}
+                  className="inline-flex rounded-full bg-white px-5 py-3 text-sm font-medium text-stone-900 transition hover:bg-stone-200"
+                >
+                  导出 ZIP
+                </a>
+              )}
+              {preview ? (
+                <div className="mt-2 text-xs uppercase tracking-[0.18em] text-stone-400">Preview only</div>
+              ) : null}
             </div>
           </div>
         </div>

@@ -13,7 +13,7 @@ test("results workbench derives chapter status from the course-level latest run 
 });
 
 test("results workbench uses course-level latest run status for artifact loading hints", () => {
-  assert.match(workbenchSource, /const loadingArtifacts = isArtifactTreeLoading\(context\?\.latest_run\?\.status\);/);
+  assert.match(workbenchSource, /const loadingArtifacts = isPreview \? false : isArtifactTreeLoading\(context\?\.latest_run\?\.status\);/);
   assert.doesNotMatch(workbenchSource, /const loadingArtifacts = isArtifactTreeLoading\(run\?\.status\);/);
 });
 

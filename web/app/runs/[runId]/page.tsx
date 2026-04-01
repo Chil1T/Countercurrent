@@ -1,16 +1,24 @@
 import { AppShell } from "@/components/app-shell";
 import { RunSessionWorkbench } from "@/components/run/run-session-workbench";
 import { buildAppShellState } from "@/lib/app-shell-state";
+import {
+  buildRunWorkbenchPreview,
+  resolvePreviewScenario,
+} from "@/lib/preview/workbench";
 
 export default async function RunPage({
   params,
   searchParams,
 }: {
   params: Promise<{ runId: string }>;
-  searchParams: Promise<{ draftId?: string; courseId?: string }>;
+  searchParams: Promise<{ draftId?: string; courseId?: string; mode?: string; scenario?: string }>;
 }) {
   const { runId } = await params;
   const resolvedSearchParams = await searchParams;
+  const preview =
+    resolvedSearchParams.mode === "preview"
+      ? buildRunWorkbenchPreview(resolvePreviewScenario(resolvedSearchParams.scenario, "running"))
+      : null;
   const shellSearchParams = new URLSearchParams();
   if (resolvedSearchParams.draftId) {
     shellSearchParams.set("draftId", resolvedSearchParams.draftId);
@@ -23,14 +31,22 @@ export default async function RunPage({
     <AppShell
       eyebrow="Step 3"
       title="运行页"
-      shellState={buildAppShellState(`/runs/${runId}`, shellSearchParams)}
-      contextIds={{
-        draftId: resolvedSearchParams.draftId ?? null,
-        runId,
-        courseId: resolvedSearchParams.courseId ?? null,
-      }}
+      shellState={buildAppShellState(preview ? "/runs" : `/runs/${runId}`, shellSearchParams)}
+      contextIds={
+        preview
+          ? {
+              draftId: null,
+              runId: null,
+              courseId: null,
+            }
+          : {
+              draftId: resolvedSearchParams.draftId ?? null,
+              runId,
+              courseId: resolvedSearchParams.courseId ?? null,
+            }
+      }
     >
-      <RunSessionWorkbench />
+      <RunSessionWorkbench key={preview ? `preview-${preview.scenario}` : runId} preview={preview} />
     </AppShell>
   );
 }

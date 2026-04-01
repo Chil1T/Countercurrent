@@ -15,19 +15,28 @@ import {
   subscribeRunLogEvents,
   subscribeRunEvents,
 } from "@/lib/api/runs";
+import type { RunWorkbenchPreview } from "@/lib/preview/workbench";
 
-export function RunSessionWorkbench() {
+export function RunSessionWorkbench({
+  preview,
+}: {
+  preview?: RunWorkbenchPreview | null;
+}) {
   const params = useParams<{ runId: string }>();
   const runId = params.runId;
+  const isPreview = !!preview;
 
-  const [run, setRun] = useState<RunSession | null>(null);
-  const [runLog, setRunLog] = useState<RunLogPreview | null>(null);
+  const [run, setRun] = useState<RunSession | null>(preview?.run ?? null);
+  const [runLog, setRunLog] = useState<RunLogPreview | null>(preview?.runLog ?? null);
   const [error, setError] = useState<string | null>(null);
   const [streamWarning, setStreamWarning] = useState<string | null>(null);
   const [logStreamWarning, setLogStreamWarning] = useState<string | null>(null);
   const [actionState, setActionState] = useState<"idle" | "resuming" | "cleaning">("idle");
 
   useEffect(() => {
+    if (preview) {
+      return;
+    }
     let cancelled = false;
 
     async function loadRun() {
@@ -68,9 +77,12 @@ export function RunSessionWorkbench() {
       cancelled = true;
       unsubscribe();
     };
-  }, [runId]);
+  }, [preview, runId]);
 
   useEffect(() => {
+    if (preview) {
+      return;
+    }
     let cancelled = false;
     let unsubscribe = () => {};
 
@@ -114,9 +126,12 @@ export function RunSessionWorkbench() {
       cancelled = true;
       unsubscribe();
     };
-  }, [runId, run?.status]);
+  }, [preview, runId, run?.status]);
 
   async function handleResume() {
+    if (isPreview) {
+      return;
+    }
     setActionState("resuming");
     setError(null);
     setStreamWarning(null);
@@ -132,6 +147,9 @@ export function RunSessionWorkbench() {
   }
 
   async function handleClean() {
+    if (isPreview) {
+      return;
+    }
     setActionState("cleaning");
     setError(null);
     setStreamWarning(null);
@@ -150,6 +168,7 @@ export function RunSessionWorkbench() {
   const canResume = run?.status === "failed" || run?.status === "completed";
   const canClean = !!run && run.status !== "running" && actionState === "idle";
   const isGlobalRun = run?.run_kind === "global";
+  const previewResultsHref = `/courses/preview/results?mode=preview&scenario=${preview?.scenario === "completed" ? "completed" : "running"}&runId=preview-run`;
   const runHeadline =
     run?.status === "running"
       ? "正在执行"
@@ -194,6 +213,14 @@ export function RunSessionWorkbench() {
     <section className="space-y-5">
       <div className="rounded-[28px] border border-stone-200 bg-stone-50 p-5 xl:p-6">
         <h3 className="text-xl font-semibold">运行总状态</h3>
+        {preview ? (
+          <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
+            <span className="font-semibold uppercase tracking-[0.18em]">Preview</span>
+            <span className="ml-2 text-sky-700">
+              当前为 {preview.scenario} 示例态，只用于查看前端样式与布局。
+            </span>
+          </div>
+        ) : null}
         <div className={`mt-4 inline-flex rounded-full border px-3 py-1 text-xs font-medium uppercase tracking-[0.16em] ${statusTone}`}>
           {runHeadline}
         </div>
@@ -250,7 +277,7 @@ export function RunSessionWorkbench() {
           <button
             type="button"
             onClick={() => void handleResume()}
-            disabled={!canResume || actionState !== "idle"}
+            disabled={isPreview || !canResume || actionState !== "idle"}
             className="rounded-full bg-stone-900 px-4 py-2 font-medium text-white transition hover:bg-stone-700 disabled:cursor-not-allowed disabled:bg-stone-400"
           >
             {actionState === "resuming" ? "恢复中..." : "Resume"}
@@ -258,18 +285,31 @@ export function RunSessionWorkbench() {
           <button
             type="button"
             onClick={() => void handleClean()}
-            disabled={!canClean}
+            disabled={isPreview || !canClean}
             className="rounded-full border border-stone-300 px-4 py-2 font-medium text-stone-700 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:border-stone-200 disabled:text-stone-400"
           >
             {actionState === "cleaning" ? "清理中..." : "Clean"}
           </button>
+          {preview ? (
+            <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-2 text-xs uppercase tracking-[0.14em] text-sky-700">
+              Preview only
+            </span>
+          ) : null}
         </div>
         {run?.course_id ? (
           <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
             <span className="rounded-full bg-stone-200 px-3 py-1 text-stone-700">
               课程 ID：{run.course_id}
             </span>
-            {run.status === "completed" ? (
+            {preview ? (
+              <Link
+                href={previewResultsHref}
+                style={{ color: "#ffffff" }}
+                className="inline-flex items-center rounded-full bg-stone-900 px-4 py-2 font-medium text-white no-underline visited:text-white hover:bg-stone-700"
+              >
+                查看结果页预览
+              </Link>
+            ) : run.status === "completed" ? (
               <Link
                 href={`/courses/${run.course_id}/results?draftId=${encodeURIComponent(run.draft_id)}&runId=${encodeURIComponent(run.id)}`}
                 style={{ color: "#ffffff" }}
