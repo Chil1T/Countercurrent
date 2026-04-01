@@ -35,7 +35,13 @@ export type RunSession = {
   review_mode: string | null;
   stages: StageStatus[];
   chapter_progress: ChapterProgress[];
+  snapshot_complete: boolean;
   last_error: string | null;
+};
+
+export type UnstartedRunWorkbenchState = {
+  draft_id: string | null;
+  course_id: string | null;
 };
 
 export type RunLogPreview = {

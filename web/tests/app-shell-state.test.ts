@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 
 import { buildAppShellState } from "../lib/app-shell-state.ts";
 
-test("input page now routes run and result navigation to empty workbenches", () => {
+test("input page now routes run and result navigation to real run and results workbenches", () => {
   const state = buildAppShellState("/courses/new/input", new URLSearchParams());
 
   assert.equal(state.navItems[2]?.href, "/runs");
@@ -52,7 +52,7 @@ test("config page keeps run and result links available when run context exists",
   assert.equal(state.navItems[3]?.enabled, true);
 });
 
-test("empty run and result routes preserve draft context without inventing preview ids", () => {
+test("run and results root routes preserve draft context without inventing preview ids", () => {
   const runState = buildAppShellState(
     "/runs",
     new URLSearchParams("draftId=draft-1234&courseId=database-course"),
@@ -66,6 +66,16 @@ test("empty run and result routes preserve draft context without inventing previ
   assert.equal(runState.navItems[3]?.href, "/courses/database-course/results?draftId=draft-1234");
   assert.equal(resultsState.navItems[2]?.href, "/runs?draftId=draft-1234&courseId=database-course");
   assert.equal(resultsState.navItems[3]?.href, "/courses/database-course/results?draftId=draft-1234");
+});
+
+test("/runs page no longer renders the dedicated empty state component", () => {
+  const runsPageSource = readFileSync(
+    resolve(import.meta.dirname, "../app/runs/page.tsx"),
+    "utf-8",
+  );
+
+  assert.equal(runsPageSource.includes("RunEmptyStateV2"), false);
+  assert.equal(runsPageSource.includes("RunSessionWorkbenchV2"), true);
 });
 
 test("run page keeps the real run route instead of demo placeholders", () => {

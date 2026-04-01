@@ -1,7 +1,8 @@
-import { RunEmptyStateV2 } from "@/components/empty/run-empty-state-v2";
+import { AppShell } from "@/components/app-shell";
+import { RunSessionWorkbenchV2 } from "@/components/run/run-session-workbench-v2";
 import { buildAppShellState } from "@/lib/app-shell-state";
 
-export default async function RunsEmptyPage({
+export default async function RunsPage({
   searchParams,
 }: {
   searchParams: Promise<{ draftId?: string; courseId?: string }>;
@@ -16,13 +17,22 @@ export default async function RunsEmptyPage({
   }
 
   return (
-    <RunEmptyStateV2
+    <AppShell
+      eyebrow="Step 3"
+      title="运行页"
       shellState={buildAppShellState("/runs", shellSearchParams)}
       contextIds={{
         draftId: resolvedSearchParams.draftId ?? null,
         runId: null,
         courseId: resolvedSearchParams.courseId ?? null,
       }}
-    />
+    >
+      <RunSessionWorkbenchV2
+        initialState={{
+          draft_id: resolvedSearchParams.draftId ?? null,
+          course_id: resolvedSearchParams.courseId ?? null,
+        }}
+      />
+    </AppShell>
   );
 }

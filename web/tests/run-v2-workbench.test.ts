@@ -10,6 +10,10 @@ const sectionsSource = readFileSync(
   new URL("../components/run/run-v2-sections.tsx", import.meta.url),
   "utf8",
 );
+const runsPageSource = readFileSync(
+  new URL("../app/runs/page.tsx", import.meta.url),
+  "utf8",
+);
 
 test("run v2 workbench exists as a dedicated component and composes run v2 sections", () => {
   assert.match(workbenchSource, /export function RunSessionWorkbenchV2/);
@@ -28,6 +32,13 @@ test("run v2 workbench preserves runtime actions and preview boundary", () => {
   assert.match(workbenchSource, /actionState/);
 });
 
+test("run v2 workbench supports an explicit unstarted state without requiring a run id", () => {
+  assert.match(runsPageSource, /RunSessionWorkbenchV2/);
+  assert.match(workbenchSource, /initialState/);
+  assert.match(workbenchSource, /runId\?: string \| null/);
+  assert.match(workbenchSource, /if \(preview \|\| !runId\)/);
+});
+
 test("run v2 sections keep run summary, chapter board, runtime flow, and log panels", () => {
   assert.match(sectionsSource, /export function RunV2Sections/);
   assert.match(sectionsSource, /Run Mission Control/);
@@ -35,4 +46,11 @@ test("run v2 sections keep run summary, chapter board, runtime flow, and log pan
   assert.match(sectionsSource, /数据通路/);
   assert.match(sectionsSource, /错误与日志/);
   assert.match(sectionsSource, /Preview only/);
+});
+
+test("run v2 sections show 未开始 messaging and disabled actions for the unstarted state", () => {
+  assert.match(sectionsSource, /任务未开始/);
+  assert.match(sectionsSource, /disabled=\{isPreview \|\| !canResume \|\| actionState !== "idle"\}/);
+  assert.match(sectionsSource, /disabled=\{isPreview \|\| !canClean\}/);
+  assert.match(sectionsSource, /日志尚未开始生成。/);
 });

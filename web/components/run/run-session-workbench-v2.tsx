@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
 
 import {
   cleanRun,
@@ -11,6 +10,7 @@ import {
   RunLogPreview,
   resumeRun,
   RunSession,
+  UnstartedRunWorkbenchState,
   subscribeRunEvents,
   subscribeRunLogEvents,
 } from "@/lib/api/runs";
@@ -19,12 +19,15 @@ import { RunV2Sections } from "@/components/run/run-v2-sections";
 
 export function RunSessionWorkbenchV2({
   preview,
+  runId = null,
+  initialState = null,
 }: {
   preview?: RunWorkbenchPreview | null;
+  runId?: string | null;
+  initialState?: UnstartedRunWorkbenchState | null;
 }) {
-  const params = useParams<{ runId: string }>();
-  const runId = params.runId;
   const isPreview = !!preview;
+  const isUnstarted = !preview && !runId;
 
   const [run, setRun] = useState<RunSession | null>(preview?.run ?? null);
   const [runLog, setRunLog] = useState<RunLogPreview | null>(preview?.runLog ?? null);
@@ -34,7 +37,7 @@ export function RunSessionWorkbenchV2({
   const [actionState, setActionState] = useState<"idle" | "resuming" | "cleaning">("idle");
 
   useEffect(() => {
-    if (preview) {
+    if (preview || !runId) {
       return;
     }
     let cancelled = false;
@@ -80,7 +83,7 @@ export function RunSessionWorkbenchV2({
   }, [preview, runId]);
 
   useEffect(() => {
-    if (preview) {
+    if (preview || !runId) {
       return;
     }
     let cancelled = false;
@@ -129,7 +132,7 @@ export function RunSessionWorkbenchV2({
   }, [preview, runId, run?.status]);
 
   async function handleResume() {
-    if (isPreview) {
+    if (isPreview || !runId) {
       return;
     }
     setActionState("resuming");
@@ -147,7 +150,7 @@ export function RunSessionWorkbenchV2({
   }
 
   async function handleClean() {
-    if (isPreview) {
+    if (isPreview || !runId) {
       return;
     }
     setActionState("cleaning");
@@ -165,12 +168,14 @@ export function RunSessionWorkbenchV2({
     }
   }
 
-  const canResume = run?.status === "failed" || run?.status === "completed";
-  const canClean = !!run && run.status !== "running" && actionState === "idle";
+  const canResume = !isUnstarted && (run?.status === "failed" || run?.status === "completed");
+  const canClean = !isUnstarted && !!run && run.status !== "running" && actionState === "idle";
   const isGlobalRun = run?.run_kind === "global";
   const previewResultsHref = `/courses/preview/results?mode=preview&scenario=${preview?.scenario === "completed" ? "completed" : "running"}&runId=preview-run`;
   const runHeadline =
-    run?.status === "running"
+    isUnstarted
+      ? "任务未开始"
+      : run?.status === "running"
       ? "正在执行"
       : run?.status === "completed"
         ? "运行已完成"
@@ -183,7 +188,9 @@ export function RunSessionWorkbenchV2({
     ? `当前运行使用 hosted backend：${run.backend}`
     : "当前运行使用 heuristic backend，本次不会调用远程模型 API。";
   const runSummary =
-    run?.status === "running"
+    isUnstarted
+      ? "当前还没有真实 run。工作台已就绪，但进度、日志和运行动作会保持禁用，直到你从配置页启动一次运行。"
+      : run?.status === "running"
       ? `${backendSummary} ${isGlobalRun ? "当前正在重建全局汇总。" : "当前正在生成章节产物。若输入样本很短，完成时间可能只有几秒。"}`
       : run?.status === "completed"
         ? `${backendSummary} ${isGlobalRun ? "全局汇总已完成更新。" : "当前运行已经完成。若阶段全部为 completed，表示本次执行已成功落盘到结果目录。"}`
@@ -224,6 +231,7 @@ export function RunSessionWorkbenchV2({
       previewScenario={preview?.scenario}
       previewResultsHref={previewResultsHref}
       isPreview={isPreview}
+      unstartedState={initialState}
       onResume={() => void handleResume()}
       onClean={() => void handleClean()}
     />

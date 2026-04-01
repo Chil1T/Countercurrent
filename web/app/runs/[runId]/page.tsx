@@ -46,7 +46,11 @@ export default async function RunPage({
             }
       }
     >
-      <RunSessionWorkbenchV2 key={preview ? `preview-${preview.scenario}` : runId} preview={preview} />
+      <RunSessionWorkbenchV2
+        key={preview ? `preview-${preview.scenario}` : runId}
+        runId={preview ? null : runId}
+        preview={preview}
+      />
     </AppShell>
   );
 }

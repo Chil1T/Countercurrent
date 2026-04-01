@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 
-import { RunLogPreview, RunSession } from "@/lib/api/runs";
+import { RunLogPreview, RunSession, UnstartedRunWorkbenchState } from "@/lib/api/runs";
 import { SurfaceCard } from "@/components/stitch-v2/surface-card";
 import { StatusChip } from "@/components/stitch-v2/status-chip";
 
@@ -20,6 +20,7 @@ export function RunV2Sections({
   previewScenario,
   previewResultsHref,
   isPreview,
+  unstartedState,
   onResume,
   onClean,
 }: {
@@ -36,9 +37,13 @@ export function RunV2Sections({
   previewScenario?: string;
   previewResultsHref: string;
   isPreview: boolean;
+  unstartedState?: UnstartedRunWorkbenchState | null;
   onResume: () => void;
   onClean: () => void;
 }) {
+  const isUnstarted = !run && !isPreview;
+  const displayCourseId = run?.course_id ?? unstartedState?.course_id ?? null;
+
   return (
     <section className="space-y-6">
       <SurfaceCard className="overflow-hidden p-6 md:p-7 xl:p-8">
@@ -65,12 +70,17 @@ export function RunV2Sections({
             <div className="mt-5 flex flex-wrap gap-2">
               <StatusChip label={run?.backend ?? "pending"} tone="accent" />
               <StatusChip label={run?.run_kind ?? "chapter"} tone="default" />
-              <StatusChip label={run?.hosted ? "hosted" : "heuristic"} tone="default" />
+              <StatusChip label={run ? (run.hosted ? "hosted" : "heuristic") : "未启动"} tone="default" />
             </div>
             {isPreview ? (
               <div className="mt-5 rounded-[1.25rem] border border-sky-200/30 bg-sky-50/10 px-4 py-3 text-sm text-sky-100">
                 <span className="font-semibold uppercase tracking-[0.18em]">Preview</span>
                 <span className="ml-2">当前为 {previewScenario} 示例态。</span>
+              </div>
+            ) : isUnstarted ? (
+              <div className="mt-5 rounded-[1.25rem] border border-stone-200/70 bg-white/10 px-4 py-3 text-sm text-stone-100">
+                <span className="font-semibold uppercase tracking-[0.18em]">任务未开始</span>
+                <span className="ml-2">等待配置页启动真实 run。</span>
               </div>
             ) : null}
           </div>
@@ -126,10 +136,10 @@ export function RunV2Sections({
           ) : null}
         </div>
 
-        {run?.course_id ? (
+        {displayCourseId ? (
           <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
             <span className="rounded-full bg-[var(--stitch-shell-panel-soft)] px-3 py-1 text-stone-700">
-              课程 ID：{run.course_id}
+              课程 ID：{displayCourseId}
             </span>
             {isPreview ? (
               <Link
@@ -139,7 +149,7 @@ export function RunV2Sections({
               >
                 查看结果页预览
               </Link>
-            ) : run.status === "completed" ? (
+            ) : run?.status === "completed" ? (
               <Link
                 href={`/courses/${run.course_id}/results?draftId=${encodeURIComponent(run.draft_id)}&runId=${encodeURIComponent(run.id)}`}
                 style={{ color: "#ffffff" }}
@@ -168,6 +178,12 @@ export function RunV2Sections({
           <p className="mt-3 text-sm text-stone-500">并发章节进度与导出状态</p>
 
           <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+            {isUnstarted ? (
+              <div className="rounded-[1.5rem] border border-dashed border-stone-300 bg-stone-50 p-4 text-sm text-stone-600">
+                <div className="font-semibold text-stone-800">任务未开始</div>
+                <div className="mt-2">运行启动后，这里会显示章节进度、当前步骤和导出状态。</div>
+              </div>
+            ) : null}
             {(run?.chapter_progress ?? []).map((chapter) => {
               const isCompleted = chapter.status === "completed";
               const isRunning = chapter.status === "running";
@@ -265,6 +281,11 @@ export function RunV2Sections({
                   </div>
                 );
               })}
+              {isUnstarted ? (
+                <div className="rounded-[1.25rem] border border-dashed border-stone-700/60 px-4 py-3 text-sm text-white/60">
+                  当前还没有真实运行，数据通路将在启动后开始推进。
+                </div>
+              ) : null}
             </div>
           </SurfaceCard>
 
@@ -287,7 +308,7 @@ export function RunV2Sections({
                 <p className="mt-3 shrink-0 text-xs leading-6 text-amber-700">{logStreamWarning}</p>
               ) : null}
               <pre className="mt-3 min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words text-xs leading-6 text-stone-700">
-                {runLog?.available ? runLog.content : "日志尚未生成。"}
+                {runLog?.available ? runLog.content : isUnstarted ? "日志尚未开始生成。" : "日志尚未生成。"}
               </pre>
               {runLog?.truncated ? (
                 <p className="mt-3 shrink-0 text-xs leading-6 text-stone-500">当前只显示尾部日志预览。</p>

@@ -30,6 +30,16 @@ test("run page supports query-driven preview mode and passes preview data into t
   assert.match(runPageSource, /<RunSessionWorkbenchV2[\s\S]*preview=\{preview\}[\s\S]*\/>/);
 });
 
+test("run root page renders the workbench directly instead of a separate empty state route", () => {
+  const runsRootSource = readFileSync(
+    new URL("../app/runs/page.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(runsRootSource, /RunSessionWorkbenchV2/);
+  assert.doesNotMatch(runsRootSource, /RunEmptyStateV2/);
+});
+
 test("results page supports query-driven preview mode and passes preview data into the workbench", () => {
   assert.match(resultsPageSource, /mode\?: string/);
   assert.match(resultsPageSource, /scenario\?: string/);
