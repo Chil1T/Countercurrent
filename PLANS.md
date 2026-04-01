@@ -1,5 +1,32 @@
 # Plans
 
+## 2026-04-01 Stitch V2 High-Fidelity Alignment
+
+- Status: in_progress
+- Goal: 在当前 Stitch V2 路由迁移基础上，进一步把默认 GUI 的字体、图标、配色、壳层、间距、圆角和页面骨架尽量对齐到 Stitch 导出代码，同时完整保留当前已接上的真实功能与语义。
+
+### Scope
+
+- 切换到 `Manrope + Inter + Material Symbols`
+- 共享壳层、token、表面层级、按钮和导航高保真对齐 Stitch
+- 五页继续逐页向 Stitch 导出结构收敛
+- Stitch 多出来的组件按“真实功能 -> 即将到来 -> 删除”处理
+- 文档与浏览器级视觉验证收口
+
+### Execution Batches
+
+1. 待执行：共享设计系统与壳层高保真对齐
+2. 待执行：Overview 与壳层额外动作对齐
+3. 待执行：Input / Config 高保真对齐
+4. 待执行：Run / Results 高保真对齐
+5. 待执行：路由级收口、文档与最终验证
+
+### Validation
+
+- `cd web; node --experimental-strip-types --test tests/app-shell-branding.test.ts tests/app-shell-state.test.ts tests/overview-v2-workbench.test.ts tests/input-v2-workbench.test.ts tests/input-workbench-ui.test.ts tests/config-v2-workbench.test.ts tests/config-workbench-ui.test.ts tests/run-v2-workbench.test.ts tests/run-workbench-layout.test.ts tests/run-workbench-chapter-progress.test.ts tests/results-v2-workbench.test.ts tests/results-layout.test.ts tests/results-workbench-state.test.ts tests/results-refresh.test.ts tests/results-view.test.ts tests/results-tree-chapter-status.test.ts tests/results-interaction.test.ts tests/artifacts-api.test.ts tests/preview-mode.test.ts`
+- `cd web; npm run lint`
+- `cd web; npm run build`
+
 ## 2026-04-01 Stitch V2 Frontend Migration
 
 - Status: completed
