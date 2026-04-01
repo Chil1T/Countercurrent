@@ -96,6 +96,7 @@ class RunService:
         self._output_root = output_root
         self._gui_config_store = gui_config_store
         self._run_state_root = output_root / "_gui" / "runs"
+        self._results_snapshot_root = output_root / "_gui" / "results-snapshots"
         self._runs: dict[str, _RunRecord] = {}
         self._course_locks: dict[str, threading.Lock] = {}
         self._course_locks_guard = threading.Lock()
@@ -257,12 +258,35 @@ class RunService:
                 "status": status,
                 "stages": stages,
                 "chapter_progress": chapter_progress,
+                "snapshot_complete": self._snapshot_complete(record.session, runtime),
                 "last_error": last_error,
             }
         )
         record.session = updated
         self._persist_record(record)
         return updated
+
+    def _snapshot_complete(self, session: RunSession, runtime: RuntimeSnapshot | None) -> bool:
+        if session.run_kind != "chapter" or runtime is None:
+            return False
+        export_ready_chapters = self._export_ready_chapter_ids(runtime, session)
+        if not export_ready_chapters:
+            return False
+        run_root = self._results_snapshot_root / session.course_id / session.id / "chapters"
+        return all(
+            any(path.is_file() for path in (run_root / chapter_id / "notebooklm").glob("*.md"))
+            for chapter_id in export_ready_chapters
+        )
+
+    @staticmethod
+    def _export_ready_chapter_ids(runtime: RuntimeSnapshot, session: RunSession) -> list[str]:
+        required_steps = _stage_names_for("chapter", session.review_enabled, session.target_output)
+        required_steps = [step_name for step_name in required_steps if step_name != "build_blueprint"]
+        export_ready: list[str] = []
+        for chapter_id, chapter_state in runtime.chapter_states.items():
+            if all(chapter_state.steps.get(step_name, {}).get("status") == "completed" for step_name in required_steps):
+                export_ready.append(chapter_id)
+        return export_ready
 
     def get_run_log(self, run_id: str, max_chars: int = 4000) -> RunLogPreview | None:
         record = self._runs.get(run_id) or self._load_record(run_id)

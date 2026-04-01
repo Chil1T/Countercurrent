@@ -124,6 +124,7 @@ class PipelineConfig:
     backend_name: str = "heuristic"
     enable_review: bool = False
     run_global_consolidation: bool = False
+    run_id: str | None = None
     provider_policy: ProviderExecutionPolicy | None = None
 
 
@@ -217,6 +218,9 @@ class PipelineChapterExecutionRuntime:
     def write_json(self, path: Path, data: dict[str, Any]) -> None:
         self.runner._write_json(path, data)
 
+    def sync_run_snapshot(self, *, chapter_id: str, notebooklm_dir: Path) -> None:
+        self.runner.sync_run_snapshot(chapter_id=chapter_id, notebooklm_dir=notebooklm_dir)
+
     def build_pack_payload(
         self,
         *,
@@ -290,6 +294,7 @@ class PipelineRunner:
             llm_backend=None,
         )
         self.course_dir = self.config.output_dir / "courses" / self.course_blueprint["course_id"]
+        self.results_snapshot_root = self.config.output_dir / "_gui" / "results-snapshots"
         self.runtime_state_path = self.course_dir / "runtime_state.json"
         self.blueprint_path = self.course_dir / "course_blueprint.json"
         self.llm_call_log_path = self.course_dir / "runtime" / "llm_calls.jsonl"
@@ -432,6 +437,22 @@ class PipelineRunner:
             "policy": self.course_blueprint["policy"],
             "blueprint_hash": self.course_blueprint["blueprint_hash"],
         }
+
+    def _chapter_snapshot_dir(self, chapter_id: str) -> Path | None:
+        run_id = self.config.run_id
+        if not run_id or self.config.run_global_consolidation:
+            return None
+        return self.results_snapshot_root / self.course_blueprint["course_id"] / run_id / "chapters" / chapter_id / "notebooklm"
+
+    def sync_run_snapshot(self, *, chapter_id: str, notebooklm_dir: Path) -> None:
+        snapshot_dir = self._chapter_snapshot_dir(chapter_id)
+        if snapshot_dir is None:
+            return
+        if snapshot_dir.exists():
+            shutil.rmtree(snapshot_dir)
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        for path in sorted(notebooklm_dir.glob("*.md")):
+            shutil.copy2(path, snapshot_dir / path.name)
 
     def _run_agent(self, agent_name: str, payload: dict[str, Any], *, scope: str) -> dict[str, Any]:
         prompt = self._load_prompt(agent_name)

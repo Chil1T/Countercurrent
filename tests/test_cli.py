@@ -294,6 +294,101 @@ class CliTest(unittest.TestCase):
                 self.assertEqual(runner.config.provider_policy.max_call_attempts, 4)
                 self.assertEqual(runner.config.provider_policy.max_resume_attempts, 3)
 
+    def test_runtime_subcommands_accept_run_id_and_forward_it_into_pipeline_config(self) -> None:
+        parser = cli.build_parser()
+        backend = type("Backend", (), {"model": "gpt-test"})()
+        blueprint = {
+            "course_id": build_course_id("数据库系统概论"),
+            "course_name": "数据库系统概论",
+            "source_type": "published_textbook",
+            "book": {"title": "数据库系统概论"},
+            "policy": {"review_mode": "light", "target_output": "interview_knowledge_base"},
+            "blueprint_hash": "hash",
+            "chapters": [{"chapter_id": "第一章·绪论", "title": "绪论"}],
+        }
+        runtime_state = {
+            "run_identity": {
+                "review_enabled": False,
+                "review_mode": "light",
+                "target_output": "interview_knowledge_base",
+            }
+        }
+        cases = (
+            (
+                "run-course",
+                [
+                    "--book-title",
+                    "数据库系统概论",
+                    "--input-dir",
+                    ".",
+                    "--output-dir",
+                    ".",
+                    "--backend",
+                    "openai",
+                    "--run-id",
+                    "run-preview-1234",
+                ],
+            ),
+            (
+                "resume-course",
+                [
+                    "--book-title",
+                    "数据库系统概论",
+                    "--input-dir",
+                    ".",
+                    "--output-dir",
+                    ".",
+                    "--backend",
+                    "openai",
+                    "--run-id",
+                    "run-preview-1234",
+                ],
+            ),
+        )
+
+        for command, argv in cases:
+            with self.subTest(command=command):
+                _RecordingPipelineRunner.instances = []
+                args = parser.parse_args([command, *argv])
+                with ExitStack() as stack:
+                    if command != "clean-course":
+                        stack.enter_context(patch.object(cli, "create_backend", return_value=backend))
+                    stack.enter_context(patch.object(cli, "PipelineRunner", _RecordingPipelineRunner))
+                    if command == "run-course":
+                        stack.enter_context(patch.object(cli, "_build_blueprint", return_value=blueprint))
+                        stack.enter_context(
+                            patch.object(
+                                cli,
+                                "apply_policy_overrides",
+                                side_effect=lambda course_blueprint, review_mode=None, target_output=None: course_blueprint,
+                            )
+                        )
+                    else:
+                        stack.enter_context(patch.object(cli, "_load_existing_course_blueprint", return_value=blueprint))
+                        stack.enter_context(patch.object(cli, "_load_existing_runtime_state", return_value=runtime_state))
+
+                    result = args.handler(args)
+
+                self.assertEqual(result, 0)
+                self.assertEqual(len(_RecordingPipelineRunner.instances), 1)
+                runner = _RecordingPipelineRunner.instances[0]
+                self.assertEqual(getattr(runner.config, "run_id", None), "run-preview-1234")
+
+        clean_args = parser.parse_args(
+            [
+                "clean-course",
+                "--book-title",
+                "数据库系统概论",
+                "--input-dir",
+                ".",
+                "--output-dir",
+                ".",
+                "--run-id",
+                "run-preview-1234",
+            ]
+        )
+        self.assertEqual(clean_args.run_id, "run-preview-1234")
+
     def test_runtime_subcommands_reject_invalid_provider_policy_values_with_argument_error(self) -> None:
         result = subprocess.run(
             [

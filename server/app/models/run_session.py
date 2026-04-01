@@ -43,6 +43,7 @@ class RunSession(BaseModel):
     review_mode: str | None = None
     stages: list[StageStatus]
     chapter_progress: list[ChapterProgress] = Field(default_factory=list)
+    snapshot_complete: bool = False
     last_error: str | None = None
 
 

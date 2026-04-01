@@ -33,6 +33,26 @@ def build_artifacts_router(service: ArtifactService) -> APIRouter:
             raise HTTPException(status_code=404, detail="Course artifacts not found")
         return payload
 
+    @router.get("/courses/{course_id}/results-snapshot")
+    def get_results_snapshot(course_id: str):
+        return service.list_results_snapshot(course_id)
+
+    @router.get("/courses/{course_id}/results-snapshot/content")
+    def get_results_snapshot_content(
+        course_id: str,
+        run_id: str = Query(...),
+        path: str = Query(...),
+        source_course_id: str | None = Query(None),
+    ):
+        payload = service.read_results_snapshot_content(
+            source_course_id=source_course_id or course_id,
+            run_id=run_id,
+            relative_path=path,
+        )
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Snapshot artifact not found")
+        return payload
+
     @router.get("/courses/{course_id}/export")
     def export_course(
         course_id: str,

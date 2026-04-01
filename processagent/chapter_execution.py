@@ -54,6 +54,8 @@ class ChapterExecutionRuntime(Protocol):
         pack: dict[str, Any],
     ) -> dict[str, Any]: ...
 
+    def sync_run_snapshot(self, *, chapter_id: str, notebooklm_dir: Path) -> None: ...
+
 
 @dataclass(frozen=True)
 class ChapterStageDefinition:
@@ -292,6 +294,8 @@ class ChapterWorker:
             if plan.review_path.exists():
                 plan.review_path.unlink()
             self.runtime_state_guard.clear_step_record(plan.chapter_id, "review")
+
+        self.runtime.sync_run_snapshot(chapter_id=plan.chapter_id, notebooklm_dir=plan.notebooklm_dir)
 
     def _execute_step(
         self,

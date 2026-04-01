@@ -355,3 +355,73 @@ class ArtifactsApiTests(unittest.TestCase):
             self._archive_names(response),
             [f"{self.course_id}/chapters/chapter-01/notebooklm/01-精讲.md"],
         )
+
+    def test_results_snapshot_lists_current_and_historical_course_outputs(self) -> None:
+        historical_course_id = "operating-systems-demo4321"
+        current_snapshot = (
+            self.output_root
+            / "_gui"
+            / "results-snapshots"
+            / self.course_id
+            / "run-current-001"
+            / "chapters"
+            / "chapter-01"
+            / "notebooklm"
+        )
+        historical_snapshot = (
+            self.output_root
+            / "_gui"
+            / "results-snapshots"
+            / historical_course_id
+            / "run-history-001"
+            / "chapters"
+            / "chapter-02"
+            / "notebooklm"
+        )
+        current_snapshot.mkdir(parents=True, exist_ok=True)
+        historical_snapshot.mkdir(parents=True, exist_ok=True)
+        (current_snapshot / "01-精讲.md").write_text("# Current\n", encoding="utf-8")
+        (historical_snapshot / "01-精讲.md").write_text("# Historical\n", encoding="utf-8")
+
+        response = self.client.get(f"/courses/{self.course_id}/results-snapshot")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["current_course_id"], self.course_id)
+        self.assertEqual(payload["current_course_runs"][0]["run_id"], "run-current-001")
+        self.assertEqual(
+            payload["current_course_runs"][0]["chapters"][0]["files"][0]["path"],
+            "chapters/chapter-01/notebooklm/01-精讲.md",
+        )
+        self.assertEqual(payload["historical_courses"][0]["course_id"], historical_course_id)
+        self.assertEqual(payload["historical_courses"][0]["runs"][0]["run_id"], "run-history-001")
+
+    def test_results_snapshot_content_reads_historical_course_markdown(self) -> None:
+        historical_course_id = "operating-systems-demo4321"
+        historical_snapshot = (
+            self.output_root
+            / "_gui"
+            / "results-snapshots"
+            / historical_course_id
+            / "run-history-001"
+            / "chapters"
+            / "chapter-02"
+            / "notebooklm"
+        )
+        historical_snapshot.mkdir(parents=True, exist_ok=True)
+        (historical_snapshot / "01-精讲.md").write_text("# Historical\n\nKnowledge pack.", encoding="utf-8")
+
+        response = self.client.get(
+            f"/courses/{self.course_id}/results-snapshot/content",
+            params={
+                "source_course_id": historical_course_id,
+                "run_id": "run-history-001",
+                "path": "chapters/chapter-02/notebooklm/01-精讲.md",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["path"], "chapters/chapter-02/notebooklm/01-精讲.md")
+        self.assertEqual(payload["kind"], "markdown")
+        self.assertIn("Knowledge pack.", payload["content"])

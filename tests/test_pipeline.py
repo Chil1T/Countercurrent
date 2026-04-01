@@ -175,6 +175,9 @@ class FakeChapterExecutionRuntime:
             "knowledge_pack": pack,
         }
 
+    def sync_run_snapshot(self, *, chapter_id: str, notebooklm_dir: Path) -> None:
+        return None
+
 
 class ConcurrentStageProbe:
     def __init__(self) -> None:
@@ -1387,6 +1390,116 @@ class PipelineRunnerTest(unittest.TestCase):
                 "completed",
             )
             self.assertEqual(runtime_state["global"], {})
+
+    def test_run_writes_final_output_snapshot_for_run_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "captions"
+            output_dir = root / "out"
+            blueprint = make_blueprint(target_output="interview_knowledge_base")
+            input_dir.mkdir()
+            (input_dir / "第一章·绪论.md").write_text(
+                "第一章 数据库系统由数据库、硬件、软件和人员组成。",
+                encoding="utf-8",
+            )
+
+            runner = PipelineRunner(
+                config=PipelineConfig(
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    course_blueprint=blueprint,
+                    run_id="run-snapshot-001",
+                ),
+                llm_backend=HeuristicLLMBackend(),
+            )
+
+            runner.run()
+
+            snapshot_dir = (
+                output_dir
+                / "_gui"
+                / "results-snapshots"
+                / blueprint["course_id"]
+                / "run-snapshot-001"
+                / "chapters"
+                / "第一章·绪论"
+                / "notebooklm"
+            )
+            self.assertTrue((snapshot_dir / "01-精讲.md").exists())
+            self.assertTrue((snapshot_dir / "02-术语与定义.md").exists())
+            self.assertTrue((snapshot_dir / "03-面试问答.md").exists())
+            self.assertTrue((snapshot_dir / "04-跨章关联.md").exists())
+            self.assertFalse((snapshot_dir / "pack_plan.json").exists())
+
+    def test_manual_global_consolidation_does_not_create_run_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "captions"
+            output_dir = root / "out"
+            blueprint = make_blueprint(target_output="interview_knowledge_base")
+            course_dir = output_dir / "courses" / blueprint["course_id"]
+            notebooklm_dir = self._chapter_dir(output_dir, blueprint) / "notebooklm"
+            input_dir.mkdir()
+            notebooklm_dir.mkdir(parents=True)
+            course_dir.mkdir(parents=True, exist_ok=True)
+
+            (course_dir / "course_blueprint.json").write_text(
+                json.dumps(blueprint, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            (course_dir / "runtime_state.json").write_text(
+                json.dumps(
+                    {
+                        "course_id": blueprint["course_id"],
+                        "blueprint_hash": blueprint["blueprint_hash"],
+                        "provider": "stub",
+                        "default_model": "",
+                        "stage_models": {},
+                        "pipeline_signature": PIPELINE_SIGNATURE,
+                        "review_enabled": False,
+                        "review_mode": blueprint["policy"]["review_mode"],
+                        "target_output": blueprint["policy"]["target_output"],
+                        "run_identity": {
+                            "review_enabled": False,
+                            "review_mode": blueprint["policy"]["review_mode"],
+                            "target_output": blueprint["policy"]["target_output"],
+                        },
+                        "chapters": {
+                            "第一章·绪论": {
+                                "steps": {
+                                    "write_terms": make_step_record(blueprint["blueprint_hash"]),
+                                    "write_interview_qa": make_step_record(blueprint["blueprint_hash"]),
+                                    "write_cross_links": make_step_record(blueprint["blueprint_hash"]),
+                                }
+                            }
+                        },
+                        "global": {},
+                        "last_error": None,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (notebooklm_dir / "02-术语与定义.md").write_text("# 术语\n\n- DBMS\n", encoding="utf-8")
+            (notebooklm_dir / "03-面试问答.md").write_text("# 面试问答\n\n- 什么是 DBMS？\n", encoding="utf-8")
+            (notebooklm_dir / "04-跨章关联.md").write_text("# 跨章关联\n\n- 与后续章节关联。\n", encoding="utf-8")
+
+            runner = PipelineRunner(
+                config=PipelineConfig(
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    course_blueprint=blueprint,
+                    run_global_consolidation=True,
+                    run_id="run-global-001",
+                ),
+                llm_backend=HeuristicLLMBackend(),
+            )
+
+            runner.run()
+
+            snapshot_root = output_dir / "_gui" / "results-snapshots" / blueprint["course_id"] / "run-global-001"
+            self.assertFalse(snapshot_root.exists())
 
     def test_run_writes_per_call_llm_accountability_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

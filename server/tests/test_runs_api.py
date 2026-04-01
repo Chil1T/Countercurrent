@@ -2139,3 +2139,54 @@ class RunsApiTests(unittest.TestCase):
         self.assertEqual(payload["course_id"], "non-existent-course")
         self.assertIsNone(payload.get("latest_run"))
 
+    def test_get_course_results_context_exposes_snapshot_complete_for_latest_run(self) -> None:
+        draft_payload = self.client.post(
+            "/course-drafts",
+            json={
+                "book_title": "Computer Networks",
+                "subtitle_text": "# 第1章 绪论\n\n本节介绍网络分层。",
+            },
+        ).json()
+        run_payload = self.client.post("/runs", json={"draft_id": draft_payload["id"]}).json()
+        run_id = run_payload["id"]
+        course_id = run_payload["course_id"]
+
+        self.runner.snapshots[run_id] = {"status": "completed", "last_error": None}
+        self._write_runtime_files(
+            course_id=course_id,
+            course_name="Computer Networks",
+            chapters={
+                "chapter-01": {
+                    "steps": {
+                        "ingest": {"status": "completed"},
+                        "curriculum_anchor": {"status": "completed"},
+                        "gap_fill": {"status": "completed"},
+                        "pack_plan": {"status": "completed"},
+                        "write_lecture_note": {"status": "completed"},
+                        "write_terms": {"status": "completed"},
+                        "write_interview_qa": {"status": "completed"},
+                        "write_cross_links": {"status": "completed"},
+                    }
+                }
+            },
+        )
+        snapshot_dir = (
+            self.output_root
+            / "_gui"
+            / "results-snapshots"
+            / course_id
+            / run_id
+            / "chapters"
+            / "chapter-01"
+            / "notebooklm"
+        )
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        (snapshot_dir / "01-精讲.md").write_text("# Snapshot\n", encoding="utf-8")
+
+        response = self.client.get(f"/courses/{course_id}/results-context")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIsNotNone(payload["latest_run"])
+        self.assertTrue(payload["latest_run"]["snapshot_complete"])
+

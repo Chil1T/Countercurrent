@@ -67,6 +67,8 @@ class LocalProcessRunner:
         ]
         if spec.input_dir is not None:
             command.extend(["--input-dir", str(spec.input_dir)])
+        if spec.command in {"run-course", "resume-course", "clean-course"}:
+            command.extend(["--run-id", spec.run_id])
         if spec.command in {"run-course", "resume-course", "build-blueprint", "bootstrap-course"}:
             command.extend(["--backend", spec.backend])
             if spec.base_url:

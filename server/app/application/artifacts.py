@@ -14,6 +14,7 @@ class ArtifactService:
     def __init__(self, output_root: Path) -> None:
         self._output_root = output_root
         self._runtime_reader = RuntimeStateReader(output_root)
+        self._results_snapshot_root = output_root / "_gui" / "results-snapshots"
 
     def list_tree(self, course_id: str) -> dict[str, object] | None:
         course_dir = self._course_dir(course_id)
@@ -126,8 +127,43 @@ class ArtifactService:
                 archive.write(path, arcname=f"{course_id}/{relative}")
         return (f"{course_id}.zip", buffer.getvalue())
 
+    def list_results_snapshot(self, course_id: str) -> dict[str, object]:
+        current_course_runs = self._list_snapshot_runs(course_id)
+        historical_courses = []
+        if self._results_snapshot_root.exists():
+            for course_root in sorted(path for path in self._results_snapshot_root.iterdir() if path.is_dir()):
+                if course_root.name == course_id:
+                    continue
+                historical_courses.append(
+                    {
+                        "course_id": course_root.name,
+                        "runs": self._list_snapshot_runs(course_root.name),
+                    }
+                )
+        return {
+            "current_course_id": course_id,
+            "current_course_runs": current_course_runs,
+            "historical_courses": historical_courses,
+        }
+
+    def read_results_snapshot_content(self, *, source_course_id: str, run_id: str, relative_path: str) -> dict[str, str] | None:
+        path = self._safe_snapshot_file_path(source_course_id, run_id, relative_path)
+        if path is None or not path.exists() or path.is_dir():
+            return None
+        return {
+            "path": relative_path,
+            "kind": self._detect_kind(path),
+            "content": path.read_text(encoding="utf-8"),
+        }
+
     def _course_dir(self, course_id: str) -> Path:
         return self._output_root / "courses" / course_id
+
+    def _snapshot_course_dir(self, course_id: str) -> Path:
+        return self._results_snapshot_root / course_id
+
+    def _snapshot_run_dir(self, course_id: str, run_id: str) -> Path:
+        return self._snapshot_course_dir(course_id) / run_id
 
     def _safe_file_path(self, course_id: str, relative_path: str) -> Path | None:
         course_dir = self._course_dir(course_id).resolve()
@@ -135,6 +171,46 @@ class ArtifactService:
         if target == course_dir or course_dir not in target.parents:
             return None
         return target
+
+    def _safe_snapshot_file_path(self, course_id: str, run_id: str, relative_path: str) -> Path | None:
+        run_dir = self._snapshot_run_dir(course_id, run_id).resolve()
+        if not run_dir.exists():
+            return None
+        target = (run_dir / relative_path).resolve()
+        if target == run_dir or run_dir not in target.parents:
+            return None
+        return target
+
+    def _list_snapshot_runs(self, course_id: str) -> list[dict[str, object]]:
+        course_root = self._snapshot_course_dir(course_id)
+        if not course_root.exists():
+            return []
+        runs: list[dict[str, object]] = []
+        for run_root in sorted((path for path in course_root.iterdir() if path.is_dir()), key=lambda path: path.name, reverse=True):
+            chapters: list[dict[str, object]] = []
+            chapters_root = run_root / "chapters"
+            if chapters_root.exists():
+                for chapter_root in sorted((path for path in chapters_root.iterdir() if path.is_dir()), key=lambda path: path.name):
+                    notebooklm_dir = chapter_root / "notebooklm"
+                    files = []
+                    if notebooklm_dir.exists():
+                        for path in sorted(notebooklm_dir.glob("*.md"), key=lambda candidate: candidate.name):
+                            files.append(
+                                {
+                                    "path": path.relative_to(run_root).as_posix(),
+                                    "kind": self._detect_kind(path),
+                                    "size": path.stat().st_size,
+                                }
+                            )
+                    if files:
+                        chapters.append(
+                            {
+                                "chapter_id": chapter_root.name,
+                                "files": files,
+                            }
+                        )
+            runs.append({"run_id": run_root.name, "chapters": chapters})
+        return runs
 
     @staticmethod
     def _is_public_artifact(relative_path: str) -> bool:
