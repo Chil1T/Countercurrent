@@ -49,6 +49,7 @@ function buildPreviewRun(status: "running" | "completed"): RunSession {
     target_output: "interview_knowledge_base",
     review_enabled: true,
     review_mode: "light",
+    snapshot_complete: status === "completed",
     stages:
       status === "running"
         ? [

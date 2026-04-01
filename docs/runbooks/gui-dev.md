@@ -426,7 +426,7 @@ out/_gui/frontend-dev.log
 
 - 预览态不请求真实 `runs` / `artifacts` / `results-context` API
 - 预览态仅用于内部 UI 调试；产品流程导航不会自动把用户带进 preview route
-- 正常从输入页 / 配置页点击“运行”或“结果”时，如果尚无真实 run 或课程产物，会进入对应的产品空态页，而不是 preview
+- 正常从输入页 / 配置页点击“运行”或“结果”时，不会进入 preview；产品默认会直接进入真实工作台
 - 运行页会显示 mock 的章节并发、日志和状态摘要
 - 结果页会显示 mock 的文件树、章节状态、review/export 区域和文件预览
 - 预览态允许文件树选择、预览切换和导出筛选框勾选等纯前端交互
@@ -463,6 +463,8 @@ out/_gui/frontend-dev.log
   - `/courses/results`
   - `/courses/[courseId]/results`
 - Stitch V2 当前只替换展示层与页面信息架构；输入、配置、运行、结果的真实 API 和 runtime 语义保持兼容。
+- `/runs` 当前不再使用产品空态页；即使尚未创建真实 run，也会直接渲染未开始工作台，并在主状态区标注“任务未开始”。
+- `/courses/results` 当前不再使用产品空态页；即使尚无当前课程快照，也会直接渲染结果工作台，并按 snapshot 结构展示可用的最终产物分组。
 - GUI 草稿在生成 `course_id` 前会先 `strip()` 教材名，避免用户输入前后空格时，GUI 指向的课程目录和 pipeline 真正写入的目录不一致。
 - `runs` 已接通本地 `LocalProcessRunner`，通过 `runtime_state.json` 和 `course_blueprint.json` 映射阶段状态。
 - 运行页顶部的 `View` 只表示当前页面类型；真正的运行状态以“运行总状态”和阶段轨道为准。
@@ -483,16 +485,21 @@ out/_gui/frontend-dev.log
   - `attempt_count`：该 step 实际发起的调用次数
   - `retry_history`：按尝试顺序记录每次 error/completed 与 `will_retry`
   - `last_error_kind`：最近一次失败尝试的错误类型；即使最终一次已成功，也可能保留最后一次 transient error 的种类
-- 结果页已接通 artifacts tree、文件预览、review 摘要和 ZIP 导出。
+- 结果页已接通 snapshot-driven 文件树、文件预览、review 摘要和 ZIP 导出。
 - 结果页已暴露 artifacts API 的两类导出过滤参数（默认关闭，需用户显式勾选）：
   - “只导出已完成章节”（`completed_chapters_only=true`）：只导出严格口径 `export_ready` 的章节作用域文件；课程根文件与非章节文件仍保留
   - “仅导出最终产物”（`final_outputs_only=true`）：只导出 `chapters/<chapter_id>/notebooklm/*`
 - 两个过滤参数同时存在时，结果是“严格 completed chapter”与“最终产物目录”的交集。
 - 结果页文件树已支持渲染按课程级最新 context 获取的章节状态（pending/running/failed/completed/export_ready），同时当 URL 中带有特定 runId 时会通过 badge 提示当前是 Scoped view。
 - 结果页文件树在 `SSE` 自动刷新时会保持当前的展开与选中状态，不再盲目展开新节点。
-- 结果页文件树当前按 `章节 -> 最终产物 / 中间数据 -> 文件` 分层；若对应 run 尚未完成，会显示“文件仍在生成中”的提示，而不是把空树误判为失败。
+- 结果页当前主树来自 `GET /courses/{course_id}/results-snapshot`，只展示最终目标 `.md`；中间 JSON、runtime 和 review 文件不再进入主树。
+- 结果页主树当前按“过去课程产物 / 当前课程产物”分区：
+  - 过去课程产物：其他 `course_id` 的历史 run 快照
+  - 当前课程产物：当前 `course_id` 下按 `run_id -> chapter_id -> notebooklm/*.md` 展示的最终产物
+- 当前 URL 若带 `runId`，结果页会在当前课程分区内对对应 run 标注“当前 run”；这只是 scoped 标识，不会改变课程级最新状态来源。
+- 若对应 run 尚未完成，结果页会显示“文件仍在生成中”的提示，而不是把空树误判为失败。
 - 如果结果页在 run 仍未完成时已经打开，artifact tree 与 review summary 当前会在 `run.update` 推进时自动刷新，不需要手动刷新页面。
-- 运行页和结果页的产品空态当前也已切到 Stitch V2；只有显式 `mode=preview` 才会进入内部调试预览态，不会由产品流程自动带入。
+- 运行页和结果页当前都不再存在独立产品空态页；只有显式 `mode=preview` 才会进入内部调试预览态，不会由产品流程自动带入。
 - FastAPI 默认以仓库根目录推导 `workspace_root` 与 `out/`，结果页不再依赖 uvicorn 是从哪个当前目录启动的。
 - 左侧 `运行` / `结果` 导航和首页入口不再使用 `demo` 占位路由；只有真实 `run_id` / `course_id` 已绑定时才会启用对应入口。
 - 当从运行页或结果页返回输入/配置页时，shell 现在会继续保留 `draftId/runId/courseId`，避免 sidebar 把 `运行` / `结果` 重新打回 `pending`。

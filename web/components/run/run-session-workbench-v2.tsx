@@ -41,10 +41,11 @@ export function RunSessionWorkbenchV2({
       return;
     }
     let cancelled = false;
+    const activeRunId = runId;
 
     async function loadRun() {
       try {
-        const nextRun = await getRun(runId);
+        const nextRun = await getRun(activeRunId);
         if (!cancelled) {
           setRun(nextRun);
           setError(null);
@@ -58,7 +59,7 @@ export function RunSessionWorkbenchV2({
     }
 
     void loadRun();
-    const unsubscribe = subscribeRunEvents(runId, {
+    const unsubscribe = subscribeRunEvents(activeRunId, {
       onUpdate: (nextRun) => {
         if (!cancelled) {
           setRun(nextRun);
@@ -88,14 +89,15 @@ export function RunSessionWorkbenchV2({
     }
     let cancelled = false;
     let unsubscribe = () => {};
+    const activeRunId = runId;
 
     async function loadRunLog() {
       try {
-        const nextLog = await getRunLog(runId);
+        const nextLog = await getRunLog(activeRunId);
         if (!cancelled) {
           setRunLog(nextLog);
           setLogStreamWarning(null);
-          unsubscribe = subscribeRunLogEvents(runId, nextLog.cursor, {
+          unsubscribe = subscribeRunLogEvents(activeRunId, nextLog.cursor, {
             onChunk: (chunk: RunLogChunk) => {
               if (cancelled) {
                 return;

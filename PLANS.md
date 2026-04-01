@@ -2,7 +2,7 @@
 
 ## 2026-04-01 Run / Results Snapshot-Driven Redesign
 
-- Status: in_progress
+- Status: completed
 - Goal: 为 `Run` 与 `Results` 引入 `run_id` 级最终产物快照和新的默认工作台语义，移除产品空态页，并让结果树按 `course_id -> run_id -> md` 展示最终学习产物。
 
 ### Scope
@@ -16,10 +16,10 @@
 
 ### Execution Batches
 
-1. 待执行：backend snapshot contract 与 `results-snapshot` 读取合同
-2. 待执行：Run 未开始态工作台与 `/runs` 路由替换
-3. 待执行：Results snapshot 工作台与 `/courses/results` 路由替换
-4. 待执行：文档、批次索引、死代码清理与最终验证
+1. 已完成：backend snapshot contract 与 `results-snapshot` 读取合同
+2. 已完成：Run 未开始态工作台与 `/runs` 路由替换
+3. 已完成：Results snapshot 工作台与 `/courses/results` 路由替换
+4. 已完成：文档、批次索引、死代码清理与最终验证
 
 ### Validation
 

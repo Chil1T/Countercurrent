@@ -41,10 +41,10 @@ python -m processagent.cli run-course `
 | Subcommand | Required | Optional | Notes |
 | --- | --- | --- | --- |
 | `build-blueprint` | `--book-title`, `--input-dir`, `--output-dir` | `--toc-file`, `--toc-text`, `--author`, `--edition`, `--publisher`, `--isbn`, `--backend`, stage/backend model args | 只生成 `course_blueprint.json` 和最小 `runtime_state.json` |
-| `run-course` | `--book-title`, `--input-dir`, `--output-dir` | `--toc-file`, `--toc-text`, `--author`, `--edition`, `--publisher`, `--isbn`, `--backend`, model/stage model args, `--clean`, `--review-mode`, `--target-output`, `--enable-review`, provider policy args（`--max-concurrent-per-run` / `--max-concurrent-global` / `--max-call-attempts` / `--max-resume-attempts`） | GUI 章节主流程走这个命令；默认不跑 `review` |
-| `resume-course` | `--book-title`, `--input-dir`, `--output-dir` | `--toc-file`, `--toc-text`, `--author`, `--edition`, `--publisher`, `--isbn`, `--backend`, `--base-url`, `--timeout-seconds`, model/stage model args, `--stub-scenario`, provider policy args（`--max-concurrent-per-run` / `--max-concurrent-global` / `--max-call-attempts` / `--max-resume-attempts`） | GUI 恢复章节运行走这个命令；刷新 provider routing 与 provider policy，但不接受 pipeline identity override |
+| `run-course` | `--book-title`, `--input-dir`, `--output-dir` | `--toc-file`, `--toc-text`, `--author`, `--edition`, `--publisher`, `--isbn`, `--backend`, model/stage model args, `--clean`, `--review-mode`, `--target-output`, `--enable-review`, `--run-id`, provider policy args（`--max-concurrent-per-run` / `--max-concurrent-global` / `--max-call-attempts` / `--max-resume-attempts`） | GUI 章节主流程走这个命令；默认不跑 `review`；若提供 `--run-id`，会同步最终 `.md` 到该 run 的 snapshot 目录 |
+| `resume-course` | `--book-title`, `--input-dir`, `--output-dir` | `--toc-file`, `--toc-text`, `--author`, `--edition`, `--publisher`, `--isbn`, `--backend`, `--base-url`, `--timeout-seconds`, model/stage model args, `--stub-scenario`, `--run-id`, provider policy args（`--max-concurrent-per-run` / `--max-concurrent-global` / `--max-call-attempts` / `--max-resume-attempts`） | GUI 恢复章节运行走这个命令；刷新 provider routing 与 provider policy，但不接受 pipeline identity override；若提供 `--run-id`，会继续刷新该 run 的 snapshot |
 | `build-global` | `--book-title`, `--output-dir` | `--backend`, model/stage model args, provider policy args（`--max-concurrent-per-run` / `--max-concurrent-global` / `--max-call-attempts` / `--max-resume-attempts`） | 手动重建 `global/*`；不读取章节输入目录 |
-| `clean-course` | `--book-title`, `--input-dir`, `--output-dir` | 无 | 不接受 `--backend` 或 stage model 参数 |
+| `clean-course` | `--book-title`, `--input-dir`, `--output-dir` | `--run-id` | 不接受 `--backend` 或 stage model 参数；若提供 `--run-id`，会额外删除该 run 在 `results-snapshots/` 下的最终产物快照 |
 | `show-status` | `--book-title`, `--input-dir`, `--output-dir` | 无 | 读取 `runtime_state.json` |
 | `inspect-source` | `--book-title`, `--input-dir`, `--output-dir` | 无 | 当前主要用于输入盘点 |
 
@@ -323,6 +323,23 @@ out/courses/<course_id>/runtime/llm_calls.jsonl
 - `completed_chapters_only=true`：仅保留 `export_ready` 章节的章节作用域文件；课程根文件和非章节文件继续保留
 - `final_outputs_only=true`：仅保留 `chapters/<chapter_id>/notebooklm/*`
 - 两者同时为 `true`：只保留“严格 completed chapter”的 `notebooklm/*`
+
+## Results Snapshot Contract
+
+GUI 当前新增只读快照层，用于支撑默认结果工作台的最终产物树：
+
+```text
+out/_gui/results-snapshots/<course_id>/<run_id>/chapters/<chapter_id>/notebooklm/*.md
+```
+
+说明：
+
+- snapshot 只保存最终目标 `.md`
+- snapshot 不包含 `intermediate/*.json`、`runtime/*`、`review_report.json`
+- `run-course` / `resume-course` 只有在提供 `--run-id` 时才会同步该层
+- `build-global` 不写入 snapshot 主树；`global/*` 仍留在兼容 artifacts/export 路径
+- `clean-course --run-id <id>` 会删除该 run 在 `results-snapshots/` 下的快照目录
+- 结果页当前主树以 snapshot 为事实源；旧 `artifacts/*` 仍用于兼容导出和其他非主树读取路径
 
 ## Status
 

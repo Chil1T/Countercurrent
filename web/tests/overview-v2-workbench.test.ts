@@ -18,12 +18,9 @@ const shellSidebarSource = readFileSync(
   new URL("../components/stitch-v2/shell-sidebar.tsx", import.meta.url),
   "utf8",
 );
-const runEmptyStateSource = readFileSync(
-  new URL("../components/empty/run-empty-state-v2.tsx", import.meta.url),
-  "utf8",
-);
-const resultsEmptyStateSource = readFileSync(
-  new URL("../components/empty/results-empty-state-v2.tsx", import.meta.url),
+const runsRootSource = readFileSync(new URL("../app/runs/page.tsx", import.meta.url), "utf8");
+const resultsRootSource = readFileSync(
+  new URL("../app/courses/results/page.tsx", import.meta.url),
   "utf8",
 );
 
@@ -51,20 +48,20 @@ test("shell extra actions are explicitly marked as coming soon instead of preten
   assert.match(shellSidebarSource, /disabled/);
 });
 
-test("run empty state v2 is a product empty state rather than preview copy", () => {
-  assert.match(runEmptyStateSource, /export function RunEmptyStateV2/);
-  assert.match(runEmptyStateSource, /尚未创建运行/);
-  assert.match(runEmptyStateSource, /配置页保存模板配置并启动运行/);
-  assert.match(runEmptyStateSource, /产品流程导航/);
-  assert.match(runEmptyStateSource, /mode=preview/);
-  assert.doesNotMatch(runEmptyStateSource, /Preview/);
+test("run root now renders the workbench directly instead of a product empty state", () => {
+  assert.match(runsRootSource, /RunSessionWorkbenchV2/);
+  assert.doesNotMatch(runsRootSource, /RunEmptyStateV2/);
+  assert.equal(
+    existsSync(new URL("../components/empty/run-empty-state-v2.tsx", import.meta.url)),
+    false,
+  );
 });
 
-test("results empty state v2 is a product empty state rather than preview copy", () => {
-  assert.match(resultsEmptyStateSource, /export function ResultsEmptyStateV2/);
-  assert.match(resultsEmptyStateSource, /尚无运行结果/);
-  assert.match(resultsEmptyStateSource, /请先完成一次课程运行/);
-  assert.match(resultsEmptyStateSource, /产品流程导航/);
-  assert.match(resultsEmptyStateSource, /mode=preview/);
-  assert.doesNotMatch(resultsEmptyStateSource, /Preview/);
+test("results root now renders the snapshot workbench directly instead of a product empty state", () => {
+  assert.match(resultsRootSource, /ResultsWorkbenchV2/);
+  assert.doesNotMatch(resultsRootSource, /ResultsEmptyStateV2/);
+  assert.equal(
+    existsSync(new URL("../components/empty/results-empty-state-v2.tsx", import.meta.url)),
+    false,
+  );
 });

@@ -19,7 +19,6 @@ import {
 } from "@/lib/api/runs";
 import { shouldRefreshArtifactsOnRunUpdate } from "@/lib/results-refresh";
 import {
-  buildResultsSnapshotSelection,
   buildResultsSnapshotTree,
   findResultsTreeNodeBySelection,
   getResultsTreeSelectionAncestors,
@@ -142,17 +141,33 @@ export function ResultsWorkbenchV2({
   const [exportCompletedOnly, setExportCompletedOnly] = useState(false);
   const [exportFinalOnly, setExportFinalOnly] = useState(false);
   const previousRunRef = useRef<RunSession | null>(null);
+  const treeSections = useMemo(
+    () =>
+      buildResultsSnapshotTree(
+        snapshot ?? {
+          current_course_id: courseId ?? "unbound-course",
+          current_course_runs: [],
+          historical_courses: [],
+        },
+        runId ?? null,
+      ),
+    [courseId, runId, snapshot],
+  );
 
   useEffect(() => {
     if (preview || !courseId) {
       return;
     }
     let cancelled = false;
+    const activeCourseId = courseId;
 
     async function refreshSnapshot() {
       setError(null);
       try {
-        const { snapshot, summary, context, nextRun } = await loadResultsSnapshot(courseId, runId);
+        const { snapshot, summary, context, nextRun } = await loadResultsSnapshot(
+          activeCourseId,
+          runId,
+        );
         if (cancelled) {
           return;
         }
@@ -192,6 +207,7 @@ export function ResultsWorkbenchV2({
       return;
     }
     let cancelled = false;
+    const activeCourseId = courseId;
 
     const unsubscribe = subscribeRunEvents(runId, {
       onUpdate: (nextRun) => {
@@ -200,7 +216,7 @@ export function ResultsWorkbenchV2({
         }
 
         if (shouldRefreshArtifactsOnRunUpdate(previousRunRef.current, nextRun)) {
-          void loadResultsSnapshot(courseId, runId)
+          void loadResultsSnapshot(activeCourseId, runId)
             .then(({ snapshot, summary, context }) => {
               if (cancelled) {
                 return;
@@ -235,19 +251,23 @@ export function ResultsWorkbenchV2({
     if (!selectedNode || !("path" in selectedNode)) {
       return;
     }
+    const selectedFileNode = selectedNode;
     if (preview) {
-      setContent(preview.contentByPath[selectedNode.path] ?? null);
       return;
     }
 
     let cancelled = false;
+    const activeCourseId = courseId;
 
     async function loadContent() {
       try {
-        const nextContent = await getResultsSnapshotContent(courseId, {
-          sourceCourseId: selectedNode.sourceCourseId === "__current__" ? null : selectedNode.sourceCourseId,
-          runId: selectedNode.runId,
-          path: selectedNode.path,
+        const nextContent = await getResultsSnapshotContent(activeCourseId, {
+          sourceCourseId:
+            selectedFileNode.sourceCourseId === "__current__"
+              ? null
+              : selectedFileNode.sourceCourseId,
+          runId: selectedFileNode.runId,
+          path: selectedFileNode.path,
         });
         if (!cancelled) {
           setContent(nextContent);
@@ -264,18 +284,24 @@ export function ResultsWorkbenchV2({
     return () => {
       cancelled = true;
     };
-  }, [courseId, preview, preview?.contentByPath, selectedSelection]);
-
-  const treeSections = useMemo(
-    () => buildResultsSnapshotTree(snapshot ?? { current_course_id: courseId ?? "unbound-course", current_course_runs: [], historical_courses: [] }, runId ?? null),
-    [courseId, runId, snapshot],
-  );
+  }, [courseId, preview, preview?.contentByPath, selectedSelection, treeSections]);
   const chapterStatusMap = useMemo(() => {
     const activeChapterProgress = context?.latest_run?.chapter_progress ?? [];
     return new Map(activeChapterProgress.map((chapter) => [chapter.chapter_id, chapter.status]));
   }, [context?.latest_run?.chapter_progress]);
   const loadingArtifacts = isPreview || !courseId ? false : isArtifactTreeLoading(context?.latest_run?.status);
-  const previewContent = selectedSelection ? content : null;
+  const previewContent = useMemo(() => {
+    if (!selectedSelection) {
+      return null;
+    }
+    if (preview) {
+      const selectedNode = findResultsTreeNodeBySelection(treeSections, selectedSelection);
+      return selectedNode && "path" in selectedNode
+        ? (preview.contentByPath[selectedNode.path] ?? null)
+        : null;
+    }
+    return content;
+  }, [content, preview, selectedSelection, treeSections]);
   const exportCacheBust = useMemo(
     () => `${snapshot?.current_course_runs.length ?? 0}-${reviewSummary?.report_count ?? 0}-${reviewSummary?.issue_count ?? 0}`,
     [reviewSummary?.issue_count, reviewSummary?.report_count, snapshot?.current_course_runs.length],
