@@ -13,7 +13,7 @@
 - `Run` 页面不再有单独空态页；没有真实 run 时也渲染完整工作台，只是在进度和状态区标明“任务未开始”
 - `Results` 页面不再展示中间件与运行文件，只展示目标最终 `.md`
 - 为了让结果页可以真正按 `course_id -> run_id -> md` 组织，需要引入新的最终产物快照合同：
-  - `out/courses/<course_id>/runs/<run_id>/notebooklm/*.md`
+  - `out/_gui/results-snapshots/<course_id>/<run_id>/chapters/<chapter_id>/notebooklm/*.md`
 - 结果页文件树改成：
   - `过去课程产物`
   - `当前课程产物`
@@ -51,6 +51,8 @@
 2. 结果页当前文件树仍然以课程目录扫描为主，会把 `intermediate/`、runtime、review 等内部文件混进结果浏览体验
 
 如果继续只改前端，不补 run-level snapshot，结果页就只能“猜”历史 run 内容，语义不稳。
+
+另外，snapshot 不能直接放在 `out/courses/<course_id>/runs/<run_id>/notebooklm/*.md` 这种平面结构里，因为每章 writer 的最终文件名集合是固定的，同一 run 下多章会互相覆盖；它也不能继续放在 `course_dir` 里，否则会和当前 `clean-course` 删除课程目录的合同直接冲突。
 
 ## Goals
 
@@ -106,12 +108,14 @@ out/
 
 ```text
 out/
-  courses/
-    <course_id>/
-      runs/
+  _gui/
+    results-snapshots/
+      <course_id>/
         <run_id>/
-          notebooklm/
-            *.md
+          chapters/
+            <chapter_id>/
+              notebooklm/
+                *.md
 ```
 
 规则：
@@ -120,7 +124,8 @@ out/
 - 不保存 `intermediate/*.json`
 - 不保存 `runtime/llm_calls.jsonl`
 - 不保存 `review_report.json`
-- 允许覆盖同一 `run_id` 下同名快照文件，但不同 `run_id` 彼此隔离
+- 允许覆盖同一 `run_id + chapter_id` 下同名快照文件，但不同 `run_id` 彼此隔离
+- snapshot 物理位置与课程主目录解耦，不受 `clean-course` 删除 `course_dir` 的影响
 
 ### Snapshot Lifecycle
 
@@ -128,7 +133,7 @@ out/
 
 - `fresh run`
   - 创建新的 `run_id`
-  - 初始化空的 `out/courses/<course_id>/runs/<run_id>/notebooklm/`
+  - 初始化空的 `out/_gui/results-snapshots/<course_id>/<run_id>/chapters/`
   - 不影响历史 `run_id` 快照
 - `resume same run`
   - 继续写入同一个 `run_id` 快照目录
@@ -205,6 +210,16 @@ out/
 
 因此 `/runs` 渲染的是“未开始工作台”，不是“伪造中的运行态”。
 
+### GUI Run Identity To Runtime
+
+因为 snapshot 必须按 GUI `run_id` 落盘，本轮同时要求把 `run_id` 从 GUI 编排层显式传进 CLI/runtime：
+
+- `CourseRunSpec` 增加 `run_id` 的 runtime 透传字段
+- `processagent.cli` 为 `run-course`、`resume-course`、`clean-course` 增加可选 `--run-id`
+- `PipelineConfig` / `PipelineRunner` 接收该 `run_id`
+
+这样 snapshot 写入点才能和 GUI session 身份对齐，而不是靠目录猜测。
+
 ## Results Page Redesign
 
 ### No More Empty Route Semantics
@@ -228,11 +243,13 @@ out/
 过去课程产物
   <course_id>
     <run_id>
-      *.md
+      <chapter_id>
+        *.md
 
 当前课程产物
   <run_id>
-    *.md
+    <chapter_id>
+      *.md
 ```
 
 其中：
@@ -299,6 +316,8 @@ out/
 - 导出过滤当前仍使用现有 `export` contract，以课程主目录 `chapters/*/notebooklm/*` 为事实源
 - 结果页主树与导出事实源暂时允许分离：前者看 run snapshot，后者看课程最终产物
 - 如果后续需要“按 run 导出”，再单独扩展，不在本轮一并引入
+- `results-snapshot/content` 必须支持读取“过去课程产物”里的文件，因此它不能只隐式绑定当前页面 `course_id`
+  - 建议最小参数集为：`source_course_id`、`run_id`、`path`
 
 ## Snapshot Creation Timing
 
@@ -307,14 +326,16 @@ run-level snapshot 需要在章节达到 `export_ready` 时增量生成，而不
 建议行为：
 
 - 章节达到 `export_ready` 时，从当前 `chapters/*/notebooklm/*.md` 复制对应最终 `.md`
-- 写入 `out/courses/<course_id>/runs/<run_id>/notebooklm/*.md`
+- 写入 `out/_gui/results-snapshots/<course_id>/<run_id>/chapters/<chapter_id>/notebooklm/*.md`
 - 同一次 run 中，如果同一章节最终产物被重写，则覆盖当前 `run_id` 目录中的同名文件
 - run 结束时只更新 run 元数据中的完整度，不再做第二套“一次性总复制”
 
 如果 run 是 `global`：
 
-- 本轮先不把 `global` 结果塞进主树
-- 后续如果需要，再单独设计 `global` 快照或课程汇总区
+- 本轮不为 `global` run 生成 snapshot
+- `global` run 完成后不再把用户默认导向新的 Results 主树
+- `global` run 的结果仍留在现有课程产物与兼容 artifacts/export 路径中
+- 若未来需要把 `global` 纳入新的结果工作台，再单独设计第二套展示区
 
 ## Route Semantics
 
@@ -342,6 +363,7 @@ run-level snapshot 需要在章节达到 `export_ready` 时增量生成，而不
 - 结果页自动刷新时保留展开和选中状态
 - 导出过滤仍保留既有合同
 - 配置页和输入页的产品简化决策保持不变
+- `global` run 的现有 artifacts/export 兼容路径继续保留
 
 以下已有语义被本轮显式替换：
 

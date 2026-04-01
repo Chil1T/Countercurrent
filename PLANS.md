@@ -1,5 +1,33 @@
 # Plans
 
+## 2026-04-01 Run / Results Snapshot-Driven Redesign
+
+- Status: in_progress
+- Goal: 为 `Run` 与 `Results` 引入 `run_id` 级最终产物快照和新的默认工作台语义，移除产品空态页，并让结果树按 `course_id -> run_id -> md` 展示最终学习产物。
+
+### Scope
+
+- 新增 `out/_gui/results-snapshots/<course_id>/<run_id>/chapters/<chapter_id>/notebooklm/*.md` 快照层
+- 新增 `results-snapshot` read API 与前端结果树接线
+- `/runs` 改为未开始工作台，不再是空态页
+- `/courses/results` 改为默认结果工作台，不再是空态页
+- 结果树按 `course_id -> run_id -> chapter_id -> md` 只展示最终 `.md`
+- 保留既有 `review-summary`、导出过滤、preview 边界与兼容 `artifacts/*` API
+
+### Execution Batches
+
+1. 待执行：backend snapshot contract 与 `results-snapshot` 读取合同
+2. 待执行：Run 未开始态工作台与 `/runs` 路由替换
+3. 待执行：Results snapshot 工作台与 `/courses/results` 路由替换
+4. 待执行：文档、批次索引、死代码清理与最终验证
+
+### Validation
+
+- `python -m unittest server.tests.test_runs_api server.tests.test_artifacts_api tests.test_pipeline -v`
+- `cd web; node --experimental-strip-types --test tests/app-shell-state.test.ts tests/run-v2-workbench.test.ts tests/run-workbench-layout.test.ts tests/preview-mode.test.ts tests/results-v2-workbench.test.ts tests/results-layout.test.ts tests/results-workbench-state.test.ts tests/results-refresh.test.ts tests/results-view.test.ts tests/results-interaction.test.ts tests/artifacts-api.test.ts`
+- `cd web; npm run lint`
+- `cd web; npm run build`
+
 ## 2026-04-01 Stitch V2 High-Fidelity Alignment
 
 - Status: in_progress
@@ -11,6 +39,7 @@
 - 共享壳层、token、表面层级、按钮和导航高保真对齐 Stitch
 - 五页继续逐页向 Stitch 导出结构收敛
 - Stitch 多出来的组件按“真实功能 -> 即将到来 -> 删除”处理
+- `Run / Results` 的空态与结果树语义后续由 `2026-04-01 Run / Results Snapshot-Driven Redesign` supersede
 - 文档与浏览器级视觉验证收口
 
 ### Execution Batches
