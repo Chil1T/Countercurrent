@@ -11,11 +11,15 @@ const resultsPageSource = readFileSync(
   "utf8",
 );
 const runWorkbenchSource = readFileSync(
-  new URL("../components/run/run-session-workbench.tsx", import.meta.url),
+  new URL("../components/run/run-session-workbench-v2.tsx", import.meta.url),
+  "utf8",
+);
+const runSectionsSource = readFileSync(
+  new URL("../components/run/run-v2-sections.tsx", import.meta.url),
   "utf8",
 );
 const resultsWorkbenchSource = readFileSync(
-  new URL("../components/results/results-workbench.tsx", import.meta.url),
+  new URL("../components/results/results-workbench-v2.tsx", import.meta.url),
   "utf8",
 );
 
@@ -23,7 +27,7 @@ test("run page supports query-driven preview mode and passes preview data into t
   assert.match(runPageSource, /mode\?: string/);
   assert.match(runPageSource, /scenario\?: string/);
   assert.match(runPageSource, /resolvedSearchParams\.mode === "preview"/);
-  assert.match(runPageSource, /<RunSessionWorkbench[\s\S]*preview=\{preview\}[\s\S]*\/>/);
+  assert.match(runPageSource, /<RunSessionWorkbenchV2[\s\S]*preview=\{preview\}[\s\S]*\/>/);
 });
 
 test("results page supports query-driven preview mode and passes preview data into the workbench", () => {
@@ -32,7 +36,7 @@ test("results page supports query-driven preview mode and passes preview data in
   assert.match(resultsPageSource, /resolvedSearchParams\.mode === "preview"/);
   assert.match(
     resultsPageSource,
-    /<ResultsWorkbench[\s\S]*courseId=\{courseId\}[\s\S]*runId=\{resolvedSearchParams\.runId \?\? null\}[\s\S]*preview=\{preview\}[\s\S]*\/>/,
+    /<ResultsWorkbenchV2[\s\S]*courseId=\{courseId\}[\s\S]*runId=\{resolvedSearchParams\.runId \?\? null\}[\s\S]*preview=\{preview\}[\s\S]*\/>/,
   );
 });
 
@@ -42,15 +46,16 @@ test("preview routes use empty-shell navigation instead of leaking preview ids i
 });
 
 test("run workbench renders a preview badge and disables real actions in preview mode", () => {
-  assert.match(runWorkbenchSource, /Preview/);
   assert.match(runWorkbenchSource, /preview\?:/);
-  assert.match(runWorkbenchSource, /disabled=\{isPreview \|\| !canResume \|\| actionState !== "idle"\}/);
-  assert.match(runWorkbenchSource, /disabled=\{isPreview \|\| !canClean\}/);
+  assert.match(runWorkbenchSource, /preview\?:/);
+  assert.match(runSectionsSource, /Preview only/);
+  assert.match(runSectionsSource, /disabled=\{isPreview \|\| !canResume \|\| actionState !== "idle"\}/);
+  assert.match(runSectionsSource, /disabled=\{isPreview \|\| !canClean\}/);
 });
 
 test("results workbench renders a preview badge and disables real export in preview mode", () => {
-  assert.match(resultsWorkbenchSource, /Preview/);
   assert.match(resultsWorkbenchSource, /preview\?:/);
-  assert.match(resultsWorkbenchSource, /if \(preview\)/);
-  assert.match(resultsWorkbenchSource, /Preview only/);
+  assert.match(resultsWorkbenchSource, /preview\?:/);
+  assert.match(resultsWorkbenchSource, /previewScenario/);
+  assert.match(resultsWorkbenchSource, /isPreview/);
 });

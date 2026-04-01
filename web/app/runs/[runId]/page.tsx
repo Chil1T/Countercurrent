@@ -1,5 +1,5 @@
 import { AppShell } from "@/components/app-shell";
-import { RunSessionWorkbench } from "@/components/run/run-session-workbench";
+import { RunSessionWorkbenchV2 } from "@/components/run/run-session-workbench-v2";
 import { buildAppShellState } from "@/lib/app-shell-state";
 import {
   buildRunWorkbenchPreview,
@@ -46,7 +46,7 @@ export default async function RunPage({
             }
       }
     >
-      <RunSessionWorkbench key={preview ? `preview-${preview.scenario}` : runId} preview={preview} />
+      <RunSessionWorkbenchV2 key={preview ? `preview-${preview.scenario}` : runId} preview={preview} />
     </AppShell>
   );
 }

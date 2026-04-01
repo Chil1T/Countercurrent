@@ -1,4 +1,4 @@
-import { ResultsWorkbench } from "@/components/results/results-workbench";
+import { ResultsWorkbenchV2 } from "@/components/results/results-workbench-v2";
 import { AppShell } from "@/components/app-shell";
 import { buildAppShellState } from "@/lib/app-shell-state";
 import {
@@ -38,7 +38,7 @@ export default async function ResultsPage({
         courseId: preview ? null : courseId,
       }}
       >
-      <ResultsWorkbench
+      <ResultsWorkbenchV2
         key={preview ? `preview-${preview.scenario}` : `${courseId}:${resolvedSearchParams.runId ?? "course"}`}
         courseId={courseId}
         runId={resolvedSearchParams.runId ?? null}

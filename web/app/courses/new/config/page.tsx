@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 
 import { AppShell } from "@/components/app-shell";
-import { TemplateConfigWorkbench } from "@/components/config/template-config-workbench";
+import { TemplateConfigWorkbenchV2 } from "@/components/config/template-config-workbench-v2";
 import { buildAppShellState } from "@/lib/app-shell-state";
 
 export default async function ConfigPage({
@@ -39,7 +39,7 @@ export default async function ConfigPage({
           </div>
         }
       >
-        <TemplateConfigWorkbench />
+        <TemplateConfigWorkbenchV2 />
       </Suspense>
     </AppShell>
   );

@@ -1,5 +1,5 @@
 import { AppShell } from "@/components/app-shell";
-import { CourseDraftWorkbench } from "@/components/input/course-draft-workbench";
+import { CourseDraftWorkbenchV2 } from "@/components/input/course-draft-workbench-v2";
 import { buildAppShellState } from "@/lib/app-shell-state";
 
 export default async function InputPage({
@@ -30,7 +30,7 @@ export default async function InputPage({
         courseId: resolvedSearchParams.courseId ?? null,
       }}
     >
-      <CourseDraftWorkbench initialDraftId={resolvedSearchParams.draftId ?? null} />
+      <CourseDraftWorkbenchV2 initialDraftId={resolvedSearchParams.draftId ?? null} />
     </AppShell>
   );
 }
