@@ -26,7 +26,7 @@
 
 ### Validation
 
-- `node --experimental-strip-types --test web/tests/app-shell-branding.test.ts web/tests/app-shell-state.test.ts web/tests/overview-workbench.test.ts web/tests/input-workbench-ui.test.ts web/tests/config-workbench-view.test.ts web/tests/config-workbench-ui.test.ts web/tests/context-panel.test.ts web/tests/preview-mode.test.ts web/tests/results-layout.test.ts web/tests/results-workbench-state.test.ts web/tests/results-refresh.test.ts web/tests/results-view.test.ts web/tests/results-tree-chapter-status.test.ts web/tests/results-interaction.test.ts web/tests/run-workbench-layout.test.ts web/tests/run-workbench-chapter-progress.test.ts`
+- `node --experimental-strip-types --test web/tests/app-shell-branding.test.ts web/tests/app-shell-state.test.ts web/tests/overview-v2-workbench.test.ts web/tests/input-v2-workbench.test.ts web/tests/config-v2-workbench.test.ts web/tests/run-v2-workbench.test.ts web/tests/results-v2-workbench.test.ts web/tests/preview-mode.test.ts web/tests/artifacts-api.test.ts web/tests/input-workbench-ui.test.ts web/tests/config-workbench-view.test.ts web/tests/config-workbench-ui.test.ts web/tests/context-panel.test.ts web/tests/results-layout.test.ts web/tests/results-workbench-state.test.ts web/tests/results-refresh.test.ts web/tests/results-view.test.ts web/tests/results-tree-chapter-status.test.ts web/tests/results-interaction.test.ts web/tests/run-workbench-layout.test.ts web/tests/run-workbench-chapter-progress.test.ts`
 - `npm run lint`
 - `npm run build`
 

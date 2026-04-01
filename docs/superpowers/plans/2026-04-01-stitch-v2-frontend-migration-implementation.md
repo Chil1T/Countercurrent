@@ -4,7 +4,7 @@
 
 **Goal:** Replace the default GUI shell and page presentations with a high-fidelity Stitch V2 interface while preserving all currently shipped draft, config, run, results, empty-state, and preview behaviors.
 
-**Architecture:** Introduce a dedicated Stitch V2 presentation layer that owns layout, visual hierarchy, and shared UI primitives, while reusing the existing backend-facing workbench logic and runtime/API contracts. Migrate page-by-page behind the current routes, keep preview explicitly query-gated, and only switch the default route composition after the parity matrix and smoke flows pass.
+**Architecture:** Introduce a dedicated Stitch V2 presentation layer that owns layout, visual hierarchy, and shared UI primitives, while reusing the existing backend-facing workbench logic and runtime/API contracts. Build the V2 page compositions in parallel first, keep current default routes on the existing workbenches until the cutover batch, keep preview explicitly query-gated, and only switch the default route composition after the parity matrix and smoke flows pass.
 
 **Tech Stack:** Next.js App Router, React 19, TypeScript, Tailwind CSS, Node test runner with `--experimental-strip-types`, existing FastAPI-backed Web APIs
 
@@ -27,66 +27,79 @@
 
 ### Overview And Empty States
 
-- Modify: `web/app/page.tsx`
-- Modify: `web/app/runs/page.tsx`
-- Modify: `web/app/courses/results/page.tsx`
-- Create: `web/components/overview/overview-workbench.tsx`
-- Create: `web/tests/overview-workbench.test.ts`
+- Create: `web/components/overview/overview-workbench-v2.tsx`
+- Create: `web/components/empty/run-empty-state-v2.tsx`
+- Create: `web/components/empty/results-empty-state-v2.tsx`
+- Create: `web/tests/overview-v2-workbench.test.ts`
 
 ### Input V2
 
-- Modify: `web/app/courses/new/input/page.tsx`
-- Modify: `web/components/input/course-draft-workbench.tsx`
+- Create: `web/components/input/course-draft-workbench-v2.tsx`
 - Create: `web/components/input/input-v2-sections.tsx`
-- Modify: `web/lib/context-panel.ts`
-- Test: `web/tests/input-workbench-ui.test.ts`
-- Test: `web/tests/context-panel.test.ts`
+- Test: `web/tests/input-v2-workbench.test.ts`
 
 ### Config V2
 
-- Modify: `web/app/courses/new/config/page.tsx`
-- Modify: `web/components/config/template-config-workbench.tsx`
-- Modify: `web/lib/config-workbench-view.ts`
+- Create: `web/components/config/template-config-workbench-v2.tsx`
 - Create: `web/components/config/config-v2-sections.tsx`
-- Test: `web/tests/config-workbench-view.test.ts`
-- Test: `web/tests/config-workbench-ui.test.ts`
+- Test: `web/tests/config-v2-workbench.test.ts`
 
 ### Run V2
 
-- Modify: `web/app/runs/[runId]/page.tsx`
-- Modify: `web/components/run/run-session-workbench.tsx`
+- Create: `web/components/run/run-session-workbench-v2.tsx`
 - Create: `web/components/run/run-v2-sections.tsx`
 - Modify: `web/lib/api/runs.ts`
 - Modify: `web/lib/preview/workbench.ts`
-- Test: `web/tests/run-workbench-layout.test.ts`
-- Test: `web/tests/run-workbench-chapter-progress.test.ts`
+- Test: `web/tests/run-v2-workbench.test.ts`
 - Test: `web/tests/preview-mode.test.ts`
 
 ### Results V2
 
-- Modify: `web/app/courses/[courseId]/results/page.tsx`
-- Modify: `web/components/results/results-workbench.tsx`
+- Create: `web/components/results/results-workbench-v2.tsx`
 - Create: `web/components/results/results-v2-sections.tsx`
 - Modify: `web/lib/results-view.ts`
 - Modify: `web/lib/results-refresh.ts`
 - Modify: `web/lib/api/artifacts.ts`
 - Modify: `web/lib/api/runs.ts`
 - Modify: `web/lib/preview/workbench.ts`
-- Test: `web/tests/results-layout.test.ts`
-- Test: `web/tests/results-workbench-state.test.ts`
-- Test: `web/tests/results-refresh.test.ts`
-- Test: `web/tests/results-view.test.ts`
-- Test: `web/tests/results-tree-chapter-status.test.ts`
-- Test: `web/tests/results-interaction.test.ts`
+- Test: `web/tests/results-v2-workbench.test.ts`
+- Test: `web/tests/artifacts-api.test.ts`
 
 ### Route Cutover / Regression / Documentation
 
+- Modify: `web/app/page.tsx`
+- Modify: `web/app/courses/new/input/page.tsx`
+- Modify: `web/app/courses/new/config/page.tsx`
+- Modify: `web/app/runs/page.tsx`
+- Modify: `web/app/runs/[runId]/page.tsx`
+- Modify: `web/app/courses/results/page.tsx`
+- Modify: `web/app/courses/[courseId]/results/page.tsx`
 - Modify: `web/lib/app-shell-state.ts`
 - Modify: `docs/runbooks/gui-dev.md`
 - Modify: `docs/README.md`
 - Modify: `PLANS.md`
 
 ---
+
+## Reference Assets Root
+
+All high-fidelity visual work must reference the local Stitch exports at:
+
+- `out/stitch/14050487305097227160/`
+
+Each task below binds its own `.png` and `.html` asset pair. Do not implement “generic Stitch style” from memory when the exported reference files exist locally.
+
+## Dual-Track Execution Rule
+
+Tasks 2-6 are **parallel V2 build tasks**, not product-route cutover tasks.
+
+Rules:
+
+- Tasks 2-6 may create new `*-v2.tsx` workbenches and presentation sections.
+- Tasks 2-6 may refactor shared helpers only when current default routes remain behaviorally unchanged.
+- Tasks 2-6 must **not** replace the default imports in `web/app/` route files.
+- Task 7 is the **first** batch allowed to switch default product routes to the V2 workbenches.
+- If a task needs to change default route behavior before Task 7, stop and update the spec/plan first.
 
 ### Task 1: Build The Shared Stitch V2 Design Foundation
 
@@ -102,7 +115,25 @@
 - Test: `web/tests/app-shell-branding.test.ts`
 - Test: `web/tests/app-shell-state.test.ts`
 
-- [ ] **Step 1: Extend the failing shell/design tests**
+**Reference Assets:**
+- `out/stitch/14050487305097227160/overview-v2-72223e80f4fc44f496faa80b5192e38f.png`
+- `out/stitch/14050487305097227160/overview-v2-72223e80f4fc44f496faa80b5192e38f.html`
+- `out/stitch/14050487305097227160/input-step1-v2-98412b91e37f42b78f70404496d85538.png`
+- `out/stitch/14050487305097227160/config-step2-v2-925e1adc724a4e948f7aff858c71d329.png`
+- `out/stitch/14050487305097227160/run-step3-v2-2732c03d32c84715a16587ceed205b9b.png`
+- `out/stitch/14050487305097227160/results-step4-v2-4d882ed4de034a6aa99c5bfe1123da05.png`
+
+- [ ] **Step 1: Review the shared visual reference assets**
+
+Open the local Stitch exports listed above and note the common shell traits:
+
+- top app bar
+- left navigation
+- hero spacing
+- surface hierarchy
+- dark control rail treatment
+
+- [ ] **Step 2: Extend the failing shell/design tests**
 
 Add assertions for:
 
@@ -111,14 +142,14 @@ Add assertions for:
 - shared card and badge primitives existing as dedicated files
 - current four-step product nav still present in the shell
 
-- [ ] **Step 2: Run the shell/design tests to confirm failure**
+- [ ] **Step 3: Run the shell/design tests to confirm failure**
 
 Run:
 - `node --experimental-strip-types --test web/tests/app-shell-branding.test.ts web/tests/app-shell-state.test.ts`
 
 Expected: FAIL because the current shell is still a single monolithic frame with no dedicated V2 primitives.
 
-- [ ] **Step 3: Add shared Stitch V2 primitives**
+- [ ] **Step 4: Add shared Stitch V2 primitives**
 
 Create focused presentational components with one responsibility each:
 
@@ -131,7 +162,7 @@ Create focused presentational components with one responsibility each:
 
 Keep them stateless and presentation-only.
 
-- [ ] **Step 4: Move Stitch V2 tokens into shared styling**
+- [ ] **Step 5: Move Stitch V2 tokens into shared styling**
 
 In `web/app/globals.css`:
 
@@ -141,7 +172,7 @@ In `web/app/globals.css`:
 
 Do not introduce a new CSS framework or theme runtime.
 
-- [ ] **Step 5: Refactor `app-shell.tsx` to consume the new shared primitives**
+- [ ] **Step 6: Refactor `app-shell.tsx` to consume the new shared primitives**
 
 Required behavior:
 
@@ -150,14 +181,14 @@ Required behavior:
 - adopt the Stitch V2 shell structure and visual hierarchy
 - do not change route semantics while changing the shell layout
 
-- [ ] **Step 6: Re-run the shell/design tests**
+- [ ] **Step 7: Re-run the shell/design tests**
 
 Run:
 - `node --experimental-strip-types --test web/tests/app-shell-branding.test.ts web/tests/app-shell-state.test.ts`
 
 Expected: PASS
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add web/app/globals.css web/components/app-shell.tsx web/components/stitch-v2 web/tests/app-shell-branding.test.ts web/tests/app-shell-state.test.ts
@@ -167,15 +198,27 @@ git commit -m "feat: add stitch v2 shell foundation"
 ### Task 2: Migrate Overview And Product Empty States
 
 **Files:**
-- Modify: `web/app/page.tsx`
-- Modify: `web/app/runs/page.tsx`
-- Modify: `web/app/courses/results/page.tsx`
-- Create: `web/components/overview/overview-workbench.tsx`
+- Create: `web/components/overview/overview-workbench-v2.tsx`
+- Create: `web/components/empty/run-empty-state-v2.tsx`
+- Create: `web/components/empty/results-empty-state-v2.tsx`
 - Test: `web/tests/app-shell-state.test.ts`
-- Create: `web/tests/overview-workbench.test.ts`
+- Create: `web/tests/overview-v2-workbench.test.ts`
 - Test: `web/tests/preview-mode.test.ts`
 
-- [ ] **Step 1: Write failing tests for the overview and empty-state V2 layout**
+**Reference Assets:**
+- `out/stitch/14050487305097227160/overview-v2-72223e80f4fc44f496faa80b5192e38f.png`
+- `out/stitch/14050487305097227160/overview-v2-72223e80f4fc44f496faa80b5192e38f.html`
+
+- [ ] **Step 1: Review the overview reference assets**
+
+Inspect the overview `.png` and `.html` and write down:
+
+- hero composition
+- CTA grouping
+- secondary information density
+- how the shell frame presents the workspace
+
+- [ ] **Step 2: Write failing tests for the overview and empty-state V2 layout**
 
 Cover:
 
@@ -184,14 +227,14 @@ Cover:
 - `/courses/results` renders a product empty state, not preview
 - empty states clearly distinguish product flow from internal preview mode
 
-- [ ] **Step 2: Run the tests to confirm failure**
+- [ ] **Step 3: Run the tests to confirm failure**
 
 Run:
-- `node --experimental-strip-types --test web/tests/app-shell-state.test.ts web/tests/preview-mode.test.ts web/tests/overview-workbench.test.ts`
+- `node --experimental-strip-types --test web/tests/app-shell-state.test.ts web/tests/preview-mode.test.ts web/tests/overview-v2-workbench.test.ts`
 
 Expected: FAIL because the current pages still use lightweight placeholders and the overview has not been rebuilt around Stitch V2.
 
-- [ ] **Step 3: Create `overview-workbench.tsx`**
+- [ ] **Step 4: Create `overview-workbench-v2.tsx`**
 
 Implement the V2 overview as a real component so the home page does not remain a one-off template.
 
@@ -201,55 +244,66 @@ It must:
 - keep the four-step product flow visible
 - avoid fake product actions with no real meaning
 
-- [ ] **Step 4: Upgrade `/runs` and `/courses/results` empty states**
+- [ ] **Step 5: Create V2 product empty-state components**
 
-Use `empty-state-panel.tsx` so both product empty routes:
+Use `empty-state-panel.tsx` so the V2 empty-state components:
 
 - feel like first-class pages
 - retain `draftId` / `courseId` context where available
 - clearly state they are product empty states, not preview
 
-- [ ] **Step 5: Re-run the overview/empty-state tests**
+Do not wire them into `web/app/` routes yet.
+
+- [ ] **Step 6: Re-run the overview/empty-state tests**
 
 Run:
-- `node --experimental-strip-types --test web/tests/app-shell-state.test.ts web/tests/preview-mode.test.ts web/tests/overview-workbench.test.ts`
+- `node --experimental-strip-types --test web/tests/app-shell-state.test.ts web/tests/preview-mode.test.ts web/tests/overview-v2-workbench.test.ts`
 
 Expected: PASS
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add web/app/page.tsx web/app/runs/page.tsx web/app/courses/results/page.tsx web/components/overview/overview-workbench.tsx web/tests/app-shell-state.test.ts web/tests/preview-mode.test.ts web/tests/overview-workbench.test.ts
-git commit -m "feat: migrate overview and empty states to stitch v2"
+git add web/components/overview/overview-workbench-v2.tsx web/components/empty/run-empty-state-v2.tsx web/components/empty/results-empty-state-v2.tsx web/tests/app-shell-state.test.ts web/tests/preview-mode.test.ts web/tests/overview-v2-workbench.test.ts
+git commit -m "feat: build stitch v2 overview and empty states"
 ```
 
 ### Task 3: Rebuild The Input Page In Stitch V2 While Preserving Local-Material Flow
 
 **Files:**
-- Modify: `web/app/courses/new/input/page.tsx`
-- Modify: `web/components/input/course-draft-workbench.tsx`
+- Create: `web/components/input/course-draft-workbench-v2.tsx`
 - Create: `web/components/input/input-v2-sections.tsx`
-- Modify: `web/lib/context-panel.ts`
-- Test: `web/tests/input-workbench-ui.test.ts`
-- Test: `web/tests/context-panel.test.ts`
+- Test: `web/tests/input-v2-workbench.test.ts`
 
-- [ ] **Step 1: Write failing input-page tests**
+**Reference Assets:**
+- `out/stitch/14050487305097227160/input-step1-v2-98412b91e37f42b78f70404496d85538.png`
+- `out/stitch/14050487305097227160/input-step1-v2-98412b91e37f42b78f70404496d85538.html`
+
+- [ ] **Step 1: Review the input-page reference assets**
+
+Inspect the input `.png` and `.html` and note:
+
+- hero / upload relationship
+- supporting “coming soon” surfaces
+- how summary information is visually separated from the authoring surface
+
+- [ ] **Step 2: Write failing input-page tests**
 
 Cover:
 
-- the input page uses dedicated V2 section composition
+- the V2 input workbench uses dedicated section composition
 - subtitle upload, manual subtitle assets, and draft summary remain visible
 - course-link UI remains absent
-- context panel still reflects the current draft/runtime fields
+- the V2 workbench can later replace the default input route without changing semantics
 
-- [ ] **Step 2: Run the input-page tests and confirm failure**
+- [ ] **Step 3: Run the input-page tests and confirm failure**
 
 Run:
-- `node --experimental-strip-types --test web/tests/input-workbench-ui.test.ts web/tests/context-panel.test.ts`
+- `node --experimental-strip-types --test web/tests/input-v2-workbench.test.ts`
 
-Expected: FAIL because the current input page is still laid out as the older workbench structure.
+Expected: FAIL because the V2 input workbench does not exist yet.
 
-- [ ] **Step 3: Extract input V2 presentation sections**
+- [ ] **Step 4: Extract input V2 presentation sections**
 
 Create `input-v2-sections.tsx` to host:
 
@@ -259,9 +313,9 @@ Create `input-v2-sections.tsx` to host:
 - coming-soon modality cards
 - draft summary presentation
 
-Keep submission logic in `course-draft-workbench.tsx`.
+Keep real submission and draft state wiring accessible to the V2 workbench. Do not switch the default route import yet.
 
-- [ ] **Step 4: Refactor `course-draft-workbench.tsx` to use the V2 sections**
+- [ ] **Step 5: Create `course-draft-workbench-v2.tsx`**
 
 Required behavior:
 
@@ -269,49 +323,59 @@ Required behavior:
 - preserve manual subtitle asset authoring
 - preserve draft creation and routing to config
 - preserve the no-course-link product decision
+- do not replace `web/app/courses/new/input/page.tsx` yet
 
-- [ ] **Step 5: Re-run the input-page tests**
+- [ ] **Step 6: Re-run the input-page tests**
 
 Run:
-- `node --experimental-strip-types --test web/tests/input-workbench-ui.test.ts web/tests/context-panel.test.ts`
+- `node --experimental-strip-types --test web/tests/input-v2-workbench.test.ts`
 
 Expected: PASS
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add web/app/courses/new/input/page.tsx web/components/input/course-draft-workbench.tsx web/components/input/input-v2-sections.tsx web/lib/context-panel.ts web/tests/input-workbench-ui.test.ts web/tests/context-panel.test.ts
-git commit -m "feat: migrate input page to stitch v2"
+git add web/components/input/course-draft-workbench-v2.tsx web/components/input/input-v2-sections.tsx web/tests/input-v2-workbench.test.ts
+git commit -m "feat: build stitch v2 input workbench"
 ```
 
 ### Task 4: Rebuild The Config Page In Stitch V2 Without Restoring Hidden Controls
 
 **Files:**
-- Modify: `web/app/courses/new/config/page.tsx`
-- Modify: `web/components/config/template-config-workbench.tsx`
-- Modify: `web/lib/config-workbench-view.ts`
+- Create: `web/components/config/template-config-workbench-v2.tsx`
 - Create: `web/components/config/config-v2-sections.tsx`
-- Test: `web/tests/config-workbench-view.test.ts`
-- Test: `web/tests/config-workbench-ui.test.ts`
+- Test: `web/tests/config-v2-workbench.test.ts`
 
-- [ ] **Step 1: Write failing config-page tests**
+**Reference Assets:**
+- `out/stitch/14050487305097227160/config-step2-v2-925e1adc724a4e948f7aff858c71d329.png`
+- `out/stitch/14050487305097227160/config-step2-v2-925e1adc724a4e948f7aff858c71d329.html`
+
+- [ ] **Step 1: Review the config-page reference assets**
+
+Inspect the config `.png` and `.html` and note:
+
+- hero / control surface proportions
+- summary rail composition
+- what should be primary vs collapsed
+
+- [ ] **Step 2: Write failing config-page tests**
 
 Cover:
 
-- config page uses a dedicated V2 section composition
+- config V2 workbench uses a dedicated section composition
 - template controls remain present
 - AI service configuration remains collapsed by default
 - course-level runtime override controls remain hidden
 - start/continue run and update-global actions remain visible
 
-- [ ] **Step 2: Run the config tests and confirm failure**
+- [ ] **Step 3: Run the config tests and confirm failure**
 
 Run:
-- `node --experimental-strip-types --test web/tests/config-workbench-view.test.ts web/tests/config-workbench-ui.test.ts`
+- `node --experimental-strip-types --test web/tests/config-v2-workbench.test.ts`
 
-Expected: FAIL because the page is still rendered through the older workbench layout.
+Expected: FAIL because the V2 config workbench does not exist yet.
 
-- [ ] **Step 3: Extract config V2 presentation sections**
+- [ ] **Step 4: Extract config V2 presentation sections**
 
 Create `config-v2-sections.tsx` to host:
 
@@ -320,9 +384,9 @@ Create `config-v2-sections.tsx` to host:
 - run controls shell
 - output summary shell
 
-Keep all real save/start handlers in `template-config-workbench.tsx`.
+Keep all real save/start handlers accessible to the V2 workbench. Do not switch the default route import yet.
 
-- [ ] **Step 4: Refactor `template-config-workbench.tsx` to use the V2 sections**
+- [ ] **Step 5: Create `template-config-workbench-v2.tsx`**
 
 Required behavior:
 
@@ -330,50 +394,61 @@ Required behavior:
 - preserve AI service save behavior
 - preserve run start and global update actions
 - continue to hide course-level runtime override UI
+- do not replace `web/app/courses/new/config/page.tsx` yet
 
-- [ ] **Step 5: Re-run the config tests**
+- [ ] **Step 6: Re-run the config tests**
 
 Run:
-- `node --experimental-strip-types --test web/tests/config-workbench-view.test.ts web/tests/config-workbench-ui.test.ts`
+- `node --experimental-strip-types --test web/tests/config-v2-workbench.test.ts`
 
 Expected: PASS
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add web/app/courses/new/config/page.tsx web/components/config/template-config-workbench.tsx web/components/config/config-v2-sections.tsx web/lib/config-workbench-view.ts web/tests/config-workbench-view.test.ts web/tests/config-workbench-ui.test.ts
-git commit -m "feat: migrate config page to stitch v2"
+git add web/components/config/template-config-workbench-v2.tsx web/components/config/config-v2-sections.tsx web/tests/config-v2-workbench.test.ts
+git commit -m "feat: build stitch v2 config workbench"
 ```
 
 ### Task 5: Rebuild The Run Page In Stitch V2 And Preserve Runtime Semantics
 
 **Files:**
-- Modify: `web/app/runs/[runId]/page.tsx`
-- Modify: `web/components/run/run-session-workbench.tsx`
+- Create: `web/components/run/run-session-workbench-v2.tsx`
 - Create: `web/components/run/run-v2-sections.tsx`
 - Modify: `web/lib/api/runs.ts`
 - Modify: `web/lib/preview/workbench.ts`
-- Test: `web/tests/run-workbench-layout.test.ts`
-- Test: `web/tests/run-workbench-chapter-progress.test.ts`
+- Test: `web/tests/run-v2-workbench.test.ts`
 - Test: `web/tests/preview-mode.test.ts`
 
-- [ ] **Step 1: Write failing run-page migration tests**
+**Reference Assets:**
+- `out/stitch/14050487305097227160/run-step3-v2-2732c03d32c84715a16587ceed205b9b.png`
+- `out/stitch/14050487305097227160/run-step3-v2-2732c03d32c84715a16587ceed205b9b.html`
+
+- [ ] **Step 1: Review the run-page reference assets**
+
+Inspect the run `.png` and `.html` and note:
+
+- top-level monitoring hierarchy
+- chapter board visual treatment
+- secondary flow/log panel structure
+
+- [ ] **Step 2: Write failing run-page migration tests**
 
 Cover:
 
-- run page renders through dedicated V2 sections
+- run V2 workbench renders through dedicated V2 sections
 - run summary, chapter cards, runtime flow, logs, and actions all remain present
 - preview still requires explicit `mode=preview`
 - `/runs` empty route and `/runs/[runId]` real route stay distinct
 
-- [ ] **Step 2: Run the run-page tests and confirm failure**
+- [ ] **Step 3: Run the run-page tests and confirm failure**
 
 Run:
-- `node --experimental-strip-types --test web/tests/run-workbench-layout.test.ts web/tests/run-workbench-chapter-progress.test.ts web/tests/preview-mode.test.ts`
+- `node --experimental-strip-types --test web/tests/run-v2-workbench.test.ts web/tests/preview-mode.test.ts`
 
-Expected: FAIL because the run page is still the earlier visual structure.
+Expected: FAIL because the V2 run workbench does not exist yet.
 
-- [ ] **Step 3: Extract run V2 presentation sections**
+- [ ] **Step 4: Extract run V2 presentation sections**
 
 Create `run-v2-sections.tsx` to host:
 
@@ -382,9 +457,9 @@ Create `run-v2-sections.tsx` to host:
 - runtime flow panel
 - log/error panel
 
-Keep the real state machine, SSE subscriptions, resume, clean, and preview gating in `run-session-workbench.tsx`.
+Keep the real state machine, SSE subscriptions, resume, clean, and preview gating accessible to the V2 workbench. Do not switch the default route import yet.
 
-- [ ] **Step 4: Refactor `run-session-workbench.tsx` to use V2 sections**
+- [ ] **Step 5: Create `run-session-workbench-v2.tsx`**
 
 Required behavior:
 
@@ -392,57 +467,66 @@ Required behavior:
 - preserve SSE updates
 - preserve chapter order and export-ready emphasis
 - preserve preview-only behavior
+- do not replace `web/app/runs/[runId]/page.tsx` yet
 
-- [ ] **Step 5: Re-run the run-page tests**
+- [ ] **Step 6: Re-run the run-page tests**
 
 Run:
-- `node --experimental-strip-types --test web/tests/run-workbench-layout.test.ts web/tests/run-workbench-chapter-progress.test.ts web/tests/preview-mode.test.ts`
+- `node --experimental-strip-types --test web/tests/run-v2-workbench.test.ts web/tests/preview-mode.test.ts`
 
 Expected: PASS
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add web/app/runs/[runId]/page.tsx web/components/run/run-session-workbench.tsx web/components/run/run-v2-sections.tsx web/lib/api/runs.ts web/lib/preview/workbench.ts web/tests/run-workbench-layout.test.ts web/tests/run-workbench-chapter-progress.test.ts web/tests/preview-mode.test.ts
-git commit -m "feat: migrate run page to stitch v2"
+git add web/components/run/run-session-workbench-v2.tsx web/components/run/run-v2-sections.tsx web/lib/api/runs.ts web/lib/preview/workbench.ts web/tests/run-v2-workbench.test.ts web/tests/preview-mode.test.ts
+git commit -m "feat: build stitch v2 run workbench"
 ```
 
 ### Task 6: Rebuild The Results Page In Stitch V2 And Preserve Course-Level Status Semantics
 
 **Files:**
-- Modify: `web/app/courses/[courseId]/results/page.tsx`
-- Modify: `web/components/results/results-workbench.tsx`
+- Create: `web/components/results/results-workbench-v2.tsx`
 - Create: `web/components/results/results-v2-sections.tsx`
 - Modify: `web/lib/results-view.ts`
 - Modify: `web/lib/results-refresh.ts`
 - Modify: `web/lib/api/artifacts.ts`
 - Modify: `web/lib/api/runs.ts`
 - Modify: `web/lib/preview/workbench.ts`
-- Test: `web/tests/results-layout.test.ts`
-- Test: `web/tests/results-workbench-state.test.ts`
-- Test: `web/tests/results-refresh.test.ts`
-- Test: `web/tests/results-view.test.ts`
-- Test: `web/tests/results-tree-chapter-status.test.ts`
-- Test: `web/tests/results-interaction.test.ts`
+- Test: `web/tests/results-v2-workbench.test.ts`
+- Test: `web/tests/artifacts-api.test.ts`
 
-- [ ] **Step 1: Write failing results-page migration tests**
+**Reference Assets:**
+- `out/stitch/14050487305097227160/results-step4-v2-4d882ed4de034a6aa99c5bfe1123da05.png`
+- `out/stitch/14050487305097227160/results-step4-v2-4d882ed4de034a6aa99c5bfe1123da05.html`
+
+- [ ] **Step 1: Review the results-page reference assets**
+
+Inspect the results `.png` and `.html` and note:
+
+- file tree / preview / export panel proportions
+- course status header treatment
+- deep-tree reading rhythm and dark/light surface balance
+
+- [ ] **Step 2: Write failing results-page migration tests**
 
 Cover:
 
-- results page renders through dedicated V2 sections
+- results V2 workbench renders through dedicated V2 sections
 - file tree, preview pane, reviewer/export pane all remain present
 - course-level latest-run semantics remain intact
 - scoped run is still label-only
 - export filters and tree refresh behavior remain intact
+- artifacts API helper behavior remains unchanged
 
-- [ ] **Step 2: Run the results-page tests and confirm failure**
+- [ ] **Step 3: Run the results-page tests and confirm failure**
 
 Run:
-- `node --experimental-strip-types --test web/tests/results-layout.test.ts web/tests/results-workbench-state.test.ts web/tests/results-refresh.test.ts web/tests/results-view.test.ts web/tests/results-tree-chapter-status.test.ts web/tests/results-interaction.test.ts`
+- `node --experimental-strip-types --test web/tests/results-v2-workbench.test.ts web/tests/artifacts-api.test.ts`
 
-Expected: FAIL because the page is still rendered through the prior layout.
+Expected: FAIL because the V2 results workbench does not exist yet.
 
-- [ ] **Step 3: Extract results V2 presentation sections**
+- [ ] **Step 4: Extract results V2 presentation sections**
 
 Create `results-v2-sections.tsx` to host:
 
@@ -451,9 +535,9 @@ Create `results-v2-sections.tsx` to host:
 - review/export shell
 - course/scoped status headers
 
-Keep real loading, SSE refresh, export toggle state, and file selection state in `results-workbench.tsx`.
+Keep real loading, SSE refresh, export toggle state, and file selection state accessible to the V2 workbench. Do not switch the default route import yet.
 
-- [ ] **Step 4: Refactor `results-workbench.tsx` to use V2 sections**
+- [ ] **Step 5: Create `results-workbench-v2.tsx`**
 
 Required behavior:
 
@@ -462,19 +546,20 @@ Required behavior:
 - preserve export toggle semantics
 - preserve tree refresh and selection stability
 - preserve preview-only mode
+- do not replace `web/app/courses/[courseId]/results/page.tsx` yet
 
-- [ ] **Step 5: Re-run the results-page tests**
+- [ ] **Step 6: Re-run the results-page tests**
 
 Run:
-- `node --experimental-strip-types --test web/tests/results-layout.test.ts web/tests/results-workbench-state.test.ts web/tests/results-refresh.test.ts web/tests/results-view.test.ts web/tests/results-tree-chapter-status.test.ts web/tests/results-interaction.test.ts`
+- `node --experimental-strip-types --test web/tests/results-v2-workbench.test.ts web/tests/artifacts-api.test.ts`
 
 Expected: PASS
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add web/app/courses/[courseId]/results/page.tsx web/components/results/results-workbench.tsx web/components/results/results-v2-sections.tsx web/lib/results-view.ts web/lib/results-refresh.ts web/lib/api/artifacts.ts web/lib/api/runs.ts web/lib/preview/workbench.ts web/tests/results-layout.test.ts web/tests/results-workbench-state.test.ts web/tests/results-refresh.test.ts web/tests/results-view.test.ts web/tests/results-tree-chapter-status.test.ts web/tests/results-interaction.test.ts
-git commit -m "feat: migrate results page to stitch v2"
+git add web/components/results/results-workbench-v2.tsx web/components/results/results-v2-sections.tsx web/lib/results-view.ts web/lib/results-refresh.ts web/lib/api/artifacts.ts web/lib/api/runs.ts web/lib/preview/workbench.ts web/tests/results-v2-workbench.test.ts web/tests/artifacts-api.test.ts
+git commit -m "feat: build stitch v2 results workbench"
 ```
 
 ### Task 7: Cut Default Product Routes Over To Stitch V2 And Remove Transitional UI Debt
@@ -491,6 +576,7 @@ git commit -m "feat: migrate results page to stitch v2"
 - Modify: `web/app/courses/[courseId]/results/page.tsx`
 - Test: `web/tests/app-shell-state.test.ts`
 - Test: `web/tests/preview-mode.test.ts`
+- Test: `web/tests/artifacts-api.test.ts`
 
 - [ ] **Step 1: Write a failing cutover test set**
 
@@ -500,6 +586,7 @@ Cover:
 - preview routes remain explicit and internal
 - no product navigation invents preview ids or preview semantics
 - the parity matrix release gate is expressible in the test set comments and checkpoints
+- the route files now import the V2 workbenches instead of the old ones
 
 - [ ] **Step 2: Run the cutover tests and confirm failure**
 
@@ -521,19 +608,40 @@ Required final behavior:
 - `/`, `/courses/new/input`, `/courses/new/config`, `/runs`, `/runs/[runId]`, `/courses/results`, `/courses/[courseId]/results` all use the V2 shell and page sections
 - `preview` remains explicit and internal-only
 
-- [ ] **Step 5: Run the release-gate smoke validation**
+- [ ] **Step 5: Run the explicit browser smoke flows from the GUI runbook**
 
-Run at least:
-- `node --experimental-strip-types --test web/tests/app-shell-state.test.ts web/tests/preview-mode.test.ts web/tests/input-workbench-ui.test.ts web/tests/config-workbench-ui.test.ts web/tests/run-workbench-layout.test.ts web/tests/run-workbench-chapter-progress.test.ts web/tests/results-layout.test.ts web/tests/results-workbench-state.test.ts web/tests/results-refresh.test.ts web/tests/results-view.test.ts web/tests/results-tree-chapter-status.test.ts web/tests/results-interaction.test.ts`
+Follow `docs/runbooks/gui-dev.md`:
+
+1. Start services and pass health checks.
+2. Product main-flow smoke:
+   - `Input -> Config -> Run -> Results`
+3. Run control smoke:
+   - open a real run
+   - execute `resume` or `clean`
+   - verify status/log behavior
+4. Results semantics smoke:
+   - verify course-level latest state
+   - verify scoped run label
+   - verify filtered export toggles
+5. Internal preview smoke:
+   - open `/runs/preview?mode=preview&scenario=running`
+   - open `/courses/preview/results?mode=preview&scenario=completed`
+
+Record pass/fail bullets in the task handoff for each smoke flow before committing.
+
+- [ ] **Step 6: Run the release-gate static validation**
+
+Run:
+- `node --experimental-strip-types --test web/tests/app-shell-state.test.ts web/tests/preview-mode.test.ts web/tests/input-workbench-ui.test.ts web/tests/config-workbench-ui.test.ts web/tests/run-workbench-layout.test.ts web/tests/run-workbench-chapter-progress.test.ts web/tests/results-layout.test.ts web/tests/results-workbench-state.test.ts web/tests/results-refresh.test.ts web/tests/results-view.test.ts web/tests/results-tree-chapter-status.test.ts web/tests/results-interaction.test.ts web/tests/artifacts-api.test.ts`
 - `npm run lint`
 - `npm run build`
 
 Expected: PASS
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add web/components/app-shell.tsx web/lib/app-shell-state.ts web/app/page.tsx web/app/courses/new/input/page.tsx web/app/courses/new/config/page.tsx web/app/runs/page.tsx web/app/runs/[runId]/page.tsx web/app/courses/results/page.tsx web/app/courses/[courseId]/results/page.tsx web/tests/app-shell-state.test.ts web/tests/preview-mode.test.ts
+git add web/components/app-shell.tsx web/lib/app-shell-state.ts web/app/page.tsx web/app/courses/new/input/page.tsx web/app/courses/new/config/page.tsx web/app/runs/page.tsx web/app/runs/[runId]/page.tsx web/app/courses/results/page.tsx web/app/courses/[courseId]/results/page.tsx web/tests/app-shell-state.test.ts web/tests/preview-mode.test.ts web/tests/artifacts-api.test.ts
 git commit -m "feat: switch product routes to stitch v2"
 ```
 
@@ -544,9 +652,9 @@ git commit -m "feat: switch product routes to stitch v2"
 - Modify: `docs/README.md`
 - Modify: `PLANS.md`
 
-- [ ] **Step 1: Write the failing documentation checklist**
+- [ ] **Step 1: Audit existing documentation and index coverage**
 
-Create a short checklist in the task notes and confirm the docs are currently missing:
+Create a short checklist in the task notes and verify whether these are already present or stale:
 
 - Stitch V2 as the default product shell
 - preview remains internal-only
@@ -564,13 +672,14 @@ Required updates:
 - `docs/README.md`
   - refresh the current GUI baseline if the default product shell has materially changed
 - `PLANS.md`
-  - add a new batch index entry for the Stitch V2 migration
+  - update the existing Stitch V2 migration entry if it is already present
+  - only create a new entry if absent
   - include goal, scope, execution batches, and validation references
 
 - [ ] **Step 3: Run the final validation suite**
 
 Run:
-- `node --experimental-strip-types --test web/tests/app-shell-branding.test.ts web/tests/app-shell-state.test.ts web/tests/overview-workbench.test.ts web/tests/input-workbench-ui.test.ts web/tests/config-workbench-view.test.ts web/tests/config-workbench-ui.test.ts web/tests/context-panel.test.ts web/tests/preview-mode.test.ts web/tests/results-layout.test.ts web/tests/results-workbench-state.test.ts web/tests/results-refresh.test.ts web/tests/results-view.test.ts web/tests/results-tree-chapter-status.test.ts web/tests/results-interaction.test.ts web/tests/run-workbench-layout.test.ts web/tests/run-workbench-chapter-progress.test.ts`
+- `node --experimental-strip-types --test web/tests/app-shell-branding.test.ts web/tests/app-shell-state.test.ts web/tests/overview-v2-workbench.test.ts web/tests/input-v2-workbench.test.ts web/tests/config-v2-workbench.test.ts web/tests/preview-mode.test.ts web/tests/results-v2-workbench.test.ts web/tests/artifacts-api.test.ts`
 - `npm run lint`
 - `npm run build`
 
@@ -586,7 +695,8 @@ git commit -m "docs: finalize stitch v2 migration plan references"
 ## Notes For Execution
 
 - Stay inside the frozen-contract boundaries from the spec.
-- Prefer creating presentational section components over inflating the existing workbench files further.
+- Prefer creating presentational section components and `*-v2.tsx` workbenches over inflating the existing default workbench files further.
 - Keep preview routing explicit: no product navigation should rely on `preview-run`, `preview-course`, or similar pseudo-identities.
-- When a task creates a new V2 section component, keep it presentation-only and leave API wiring in the workbench unless the plan explicitly says otherwise.
+- Tasks 2-6 are parallel-build tasks. Do not switch default `web/app/` routes to the V2 workbenches until Task 7.
+- When a task creates a new V2 section component, keep it presentation-only and leave API wiring in the workbench or V2 bridge unless the plan explicitly says otherwise.
 - If a task requires changing semantics instead of presentation, stop and update the spec before proceeding.
