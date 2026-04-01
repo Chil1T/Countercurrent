@@ -2,7 +2,7 @@
 
 ## Scope
 
-本 runbook 说明 `databaseleaning` GUI 当前默认产品页的本地开发与最小验证方式。当前默认界面已经切到 Stitch V2 壳层与五页骨架，但 runtime/API contract 保持不变。
+本 runbook 说明 `databaseleaning` GUI 当前默认产品页的本地开发与最小验证方式。当前默认界面已经切到基于 Stitch V4 参考样例的新展示层，但 runtime/API contract 保持不变。
 
 ## Components
 
@@ -450,11 +450,22 @@ out/_gui/frontend-dev.log
 
 这条基线用于人工验收与远程协同排障，不替代用户自己的真实浏览器测试。
 
+## Frontend Asset And Copy Guardrails
+
+当前默认产品页在前端资产与文案上遵循以下规则：
+
+- 品牌 Logo、图标字体、favicon 等核心视觉资产优先放在 `web/public/`，避免依赖远端 CDN 或运行时网络可达性。
+- `Material Symbols` 这类字体图标如果进入默认产品页，必须保证本地可加载；不能把导航或主操作图标建立在浏览器能访问外部字体服务的前提上。
+- 品牌主标识优先使用正式静态文件，而不是长期依赖临时内联 SVG。
+- 用户可见文案应表达产品状态、下一步动作和业务结果；不要直接暴露“伪空态”“不会伪造进度或日志”“内部兜底策略”这类实现说明。
+- 当视觉参考来自 Stitch 等静态样例时，样例负责审美与层级，正式行为与信息来源仍以后端 contract 和 `docs/` 正式文档为准。
+
 ## Current Notes
 
 - 输入页当前的最小可执行输入是：教材名 + 字幕文本；字幕会落盘到 GUI draft input 目录，供 `run-course` 使用。
 - 输入页当前只在产品界面暴露本地素材输入，不再显示“课程链接”入口；后端草稿字段仍保留兼容历史数据。
-- 默认产品路由当前已切到 Stitch V2 页面骨架：
+- 默认产品页当前使用本地静态品牌 Logo 与本地 `Material Symbols` 字体；导航与主操作图标不再依赖远端字体服务。
+- 默认产品路由当前已切到基于 Stitch V4 参考样例的产品页：
   - `/`
   - `/courses/new/input`
   - `/courses/new/config`
@@ -462,14 +473,14 @@ out/_gui/frontend-dev.log
   - `/runs/[runId]`
   - `/courses/results`
   - `/courses/[courseId]/results`
-- Stitch V2 当前只替换展示层与页面信息架构；输入、配置、运行、结果的真实 API 和 runtime 语义保持兼容。
+- 当前默认产品页只替换展示层与页面信息架构；输入、配置、运行、结果的真实 API 和 runtime 语义保持兼容。
 - `/runs` 当前不再使用产品空态页；即使尚未创建真实 run，也会直接渲染未开始工作台，并在主状态区标注“任务未开始”。
 - `/courses/results` 当前不再使用产品空态页；即使尚无当前课程快照，也会直接渲染结果工作台，并按 snapshot 结构展示可用的最终产物分组。
 - GUI 草稿在生成 `course_id` 前会先 `strip()` 教材名，避免用户输入前后空格时，GUI 指向的课程目录和 pipeline 真正写入的目录不一致。
 - `runs` 已接通本地 `LocalProcessRunner`，通过 `runtime_state.json` 和 `course_blueprint.json` 映射阶段状态。
 - 运行页顶部的 `View` 只表示当前页面类型；真正的运行状态以“运行总状态”和阶段轨道为准。
 - 当前默认执行后端仍可设为 `heuristic`；只有当 GUI 默认值或课程覆盖显式切到 hosted provider，GUI 才会真正调用外部 AI 服务。
-- 配置页当前将“AI 服务配置”作为折叠区展示；课程级运行时覆盖编辑器暂时从 GUI 隐藏，但已有历史草稿里的覆盖值仍会继续参与 runtime 解析。
+- 配置页当前将“AI 服务配置”作为折叠区展示；课程级运行时覆盖编辑器继续从 GUI 隐藏，但已有历史草稿里的覆盖值仍会继续参与 runtime 解析。
 - 配置页的“启动 / 继续运行”遵循 CLI 的 resume 语义：同一 `course_id` 下已有且仍然有效的 checkpoint 会被复用，不默认强制全量重跑。
 - `resume` 会继续同一个 run 的冻结流水线身份；如果你修改了 provider/model/base_url/key/timeout，恢复时会读取新 routing；如果你修改了模板或 Review 策略，请创建新的 run。
 - 运行页已接入 `SSE` 事件流，并提供 `resume` / `clean` 控制动作。

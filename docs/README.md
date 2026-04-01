@@ -8,7 +8,9 @@
 - [`architecture/blueprint-first.md`](architecture/blueprint-first.md): 系统设计
 - [`architecture/runtime-layout.md`](architecture/runtime-layout.md): 运行时布局与 checkpoint 规则
 - [`schemas/course_blueprint.md`](schemas/course_blueprint.md): blueprint schema
+- [`schemas/gui-api-models.md`](schemas/gui-api-models.md): GUI 读写模型与接口合同
 - [`workstreams/`](workstreams): 正在推进的工作流
+- [`workstreams/gui-product-contract.md`](workstreams/gui-product-contract.md): GUI 产品层页面/状态/上下文合同
 - [`decisions/`](decisions): ADR 风格决策记录
 - [`runbooks/`](runbooks): 操作步骤
 - [`runbooks/run-course.md`](runbooks/run-course.md): CLI/run/resume/clean/status 合同与操作规则
@@ -19,7 +21,7 @@
 
 - `Blueprint-First Modernization` 已完成，运行时事实源仍是 `course_blueprint.json` 与 `runtime_state.json`
 - `GUI Web Product v1` 已完成，当前已具备输入、配置、运行、结果四页主流程
-- `Stitch V2 Frontend Migration` 已完成默认产品路由切换，当前首页、输入、配置、运行、结果都使用 Stitch V2 展示层
+- 当前默认产品前端已切换到 `Stitch V4` 参考样例驱动的新展示层；首页、输入、配置、运行、结果都使用 `web/components/stitch-v4/` 下的产品页实现
 - `Run / Results Snapshot-Driven Redesign` 已完成，`/runs` 与 `/courses/results` 不再使用产品空态页，而是默认进入工作台；结果主树改为基于 `results-snapshot` 的最终产物视图
 - GUI 当前支持真实字幕文件上传、多字幕资产输入、真实 `LocalProcessRunner`、`SSE` 运行状态、`resume` / `clean`、结果树/预览/ZIP 导出、`run.log` 增量日志流
 - GUI 当前已接入真实 hosted backend 路由：`provider`、`base_url`、`simple_model`、`complex_model`、`timeout_seconds`、`review_mode`、`target_output`
