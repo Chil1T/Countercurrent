@@ -19,6 +19,7 @@
 
 - `Blueprint-First Modernization` 已完成，运行时事实源仍是 `course_blueprint.json` 与 `runtime_state.json`
 - `GUI Web Product v1` 已完成，当前已具备输入、配置、运行、结果四页主流程
+- `Stitch V2 Frontend Migration` 已完成默认产品路由切换，当前首页、输入、配置、运行、结果与产品空态页面都使用 Stitch V2 展示层
 - GUI 当前支持真实字幕文件上传、多字幕资产输入、真实 `LocalProcessRunner`、`SSE` 运行状态、`resume` / `clean`、结果树/预览/ZIP 导出、`run.log` 增量日志流
 - GUI 当前已接入真实 hosted backend 路由：`provider`、`base_url`、`simple_model`、`complex_model`、`timeout_seconds`、`review_mode`、`target_output`
 - 用户和 Agents 查当前 GUI 行为或配置字段语义时，优先看 [`runbooks/gui-dev.md`](runbooks/gui-dev.md) 与 [`runbooks/run-course.md`](runbooks/run-course.md)

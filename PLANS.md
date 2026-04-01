@@ -2,7 +2,7 @@
 
 ## 2026-04-01 Stitch V2 Frontend Migration
 
-- Status: in_progress
+- Status: completed
 - Goal: 以 Stitch 五页设计稿为目标界面，高保真迁移默认 GUI 页面骨架，同时完整保留当前输入、配置、运行、结果、空态与 preview 的真实功能和语义。
 
 ### Scope
@@ -15,14 +15,14 @@
 
 ### Execution Batches
 
-1. 待执行：共享设计系统与壳层基础
-2. 待执行：Overview 与产品空态
-3. 待执行：Input V2
-4. 待执行：Config V2
-5. 待执行：Run V2
-6. 待执行：Results V2
-7. 待执行：默认路由切换与迁移债务清理
-8. 待执行：文档、索引与最终验证
+1. 已完成：共享设计系统与壳层基础
+2. 已完成：Overview 与产品空态
+3. 已完成：Input V2
+4. 已完成：Config V2
+5. 已完成：Run V2
+6. 已完成：Results V2
+7. 已完成：默认路由切换与迁移债务清理
+8. 已完成：文档、索引与最终验证
 
 ### Validation
 

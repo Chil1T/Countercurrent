@@ -2,7 +2,7 @@
 
 ## Scope
 
-本 runbook 说明 `databaseleaning` GUI v1 的本地开发与最小验证方式。
+本 runbook 说明 `databaseleaning` GUI 当前默认产品页的本地开发与最小验证方式。当前默认界面已经切到 Stitch V2 壳层与五页骨架，但 runtime/API contract 保持不变。
 
 ## Components
 
@@ -454,6 +454,15 @@ out/_gui/frontend-dev.log
 
 - 输入页当前的最小可执行输入是：教材名 + 字幕文本；字幕会落盘到 GUI draft input 目录，供 `run-course` 使用。
 - 输入页当前只在产品界面暴露本地素材输入，不再显示“课程链接”入口；后端草稿字段仍保留兼容历史数据。
+- 默认产品路由当前已切到 Stitch V2 页面骨架：
+  - `/`
+  - `/courses/new/input`
+  - `/courses/new/config`
+  - `/runs`
+  - `/runs/[runId]`
+  - `/courses/results`
+  - `/courses/[courseId]/results`
+- Stitch V2 当前只替换展示层与页面信息架构；输入、配置、运行、结果的真实 API 和 runtime 语义保持兼容。
 - GUI 草稿在生成 `course_id` 前会先 `strip()` 教材名，避免用户输入前后空格时，GUI 指向的课程目录和 pipeline 真正写入的目录不一致。
 - `runs` 已接通本地 `LocalProcessRunner`，通过 `runtime_state.json` 和 `course_blueprint.json` 映射阶段状态。
 - 运行页顶部的 `View` 只表示当前页面类型；真正的运行状态以“运行总状态”和阶段轨道为准。
@@ -483,6 +492,7 @@ out/_gui/frontend-dev.log
 - 结果页文件树在 `SSE` 自动刷新时会保持当前的展开与选中状态，不再盲目展开新节点。
 - 结果页文件树当前按 `章节 -> 最终产物 / 中间数据 -> 文件` 分层；若对应 run 尚未完成，会显示“文件仍在生成中”的提示，而不是把空树误判为失败。
 - 如果结果页在 run 仍未完成时已经打开，artifact tree 与 review summary 当前会在 `run.update` 推进时自动刷新，不需要手动刷新页面。
+- 运行页和结果页的产品空态当前也已切到 Stitch V2；只有显式 `mode=preview` 才会进入内部调试预览态，不会由产品流程自动带入。
 - FastAPI 默认以仓库根目录推导 `workspace_root` 与 `out/`，结果页不再依赖 uvicorn 是从哪个当前目录启动的。
 - 左侧 `运行` / `结果` 导航和首页入口不再使用 `demo` 占位路由；只有真实 `run_id` / `course_id` 已绑定时才会启用对应入口。
 - 当从运行页或结果页返回输入/配置页时，shell 现在会继续保留 `draftId/runId/courseId`，避免 sidebar 把 `运行` / `结果` 重新打回 `pending`。
