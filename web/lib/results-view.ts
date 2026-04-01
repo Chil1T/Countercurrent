@@ -68,6 +68,21 @@ export function isArtifactTreeLoading(runStatus: string | null | undefined): boo
   return !new Set(["completed", "failed", "cleaned"]).has(runStatus);
 }
 
+export function getArtifactTreePathAncestors(path: string): string[] {
+  if (path.startsWith("chapters/")) {
+    const segments = path.split("/");
+    const chapterId = segments[1] ?? "chapter";
+    const bucket = segments[2] === "intermediate" ? "intermediate" : "final";
+    return ["chapter", chapterId, `${chapterId}:${bucket}`];
+  }
+
+  if (path.startsWith("global/")) {
+    return ["global"];
+  }
+
+  return ["runtime"];
+}
+
 export function buildArtifactTree(nodes: ArtifactNode[]): ArtifactTreeSection[] {
   const chapterGroups = new Map<
     string,
@@ -147,4 +162,23 @@ export function buildArtifactTree(nodes: ArtifactNode[]): ArtifactTreeSection[] 
       children: runtimeFiles,
     },
   ];
+}
+
+export function findArtifactTreeNodeByPath(
+  nodes: ArtifactTreeNode[],
+  path: string,
+): ArtifactTreeNode | null {
+  for (const node of nodes) {
+    if ("path" in node && node.path === path) {
+      return node;
+    }
+    if ("children" in node) {
+      const child = findArtifactTreeNodeByPath(node.children, path);
+      if (child) {
+        return child;
+      }
+    }
+  }
+
+  return null;
 }
