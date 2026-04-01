@@ -10,11 +10,17 @@ const sectionsSource = readFileSync(
   new URL("../components/results/results-v2-sections.tsx", import.meta.url),
   "utf8",
 );
+const resultsRootSource = readFileSync(
+  new URL("../app/courses/results/page.tsx", import.meta.url),
+  "utf8",
+);
 
 test("results v2 workbench exists as a dedicated component and composes results v2 sections", () => {
   assert.match(workbenchSource, /export function ResultsWorkbenchV2/);
   assert.match(workbenchSource, /ResultsV2Sections/);
-  assert.match(workbenchSource, /getArtifactTree/);
+  assert.match(resultsRootSource, /ResultsWorkbenchV2/);
+  assert.match(workbenchSource, /getResultsSnapshot/);
+  assert.match(workbenchSource, /getResultsSnapshotContent/);
   assert.match(workbenchSource, /getReviewSummary/);
   assert.match(workbenchSource, /getCourseResultsContext/);
   assert.match(workbenchSource, /subscribeRunEvents/);
@@ -23,14 +29,16 @@ test("results v2 workbench exists as a dedicated component and composes results 
 test("results v2 workbench preserves course latest-run semantics and stable tree selection helpers", () => {
   assert.match(workbenchSource, /context\?\.latest_run\?\.chapter_progress \?\? \[\]/);
   assert.match(workbenchSource, /isArtifactTreeLoading\(context\?\.latest_run\?\.status\)/);
-  assert.match(workbenchSource, /findArtifactTreeNodeByPath/);
-  assert.match(workbenchSource, /getArtifactTreePathAncestors/);
+  assert.match(workbenchSource, /findResultsTreeNodeBySelection/);
+  assert.match(workbenchSource, /getResultsTreeSelectionAncestors/);
   assert.doesNotMatch(workbenchSource, /run\?\.chapter_progress \?\? context\?\.latest_run\?\.chapter_progress/);
 });
 
 test("results v2 sections keep the file tree, preview pane, and export controls", () => {
   assert.match(sectionsSource, /export function ResultsV2Sections/);
-  assert.match(sectionsSource, /Artifact Tree/);
+  assert.match(sectionsSource, /过去课程产物/);
+  assert.match(sectionsSource, /当前课程产物/);
+  assert.match(sectionsSource, /当前 run/);
   assert.match(sectionsSource, /Reviewer \/ Export/);
   assert.match(sectionsSource, /Artifact Preview/);
   assert.match(sectionsSource, /只导出已完成章节/);

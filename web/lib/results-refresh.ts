@@ -20,5 +20,9 @@ export function shouldRefreshArtifactsOnRunUpdate(previousRun: RunSession | null
     return true;
   }
 
+  if (previousRun.snapshot_complete !== nextRun.snapshot_complete) {
+    return true;
+  }
+
   return stageStatuses(previousRun) !== stageStatuses(nextRun);
 }

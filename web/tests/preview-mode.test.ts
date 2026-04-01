@@ -50,6 +50,16 @@ test("results page supports query-driven preview mode and passes preview data in
   );
 });
 
+test("results root page renders the workbench directly instead of a separate empty state route", () => {
+  const resultsRootSource = readFileSync(
+    new URL("../app/courses/results/page.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(resultsRootSource, /ResultsWorkbenchV2/);
+  assert.doesNotMatch(resultsRootSource, /ResultsEmptyStateV2/);
+});
+
 test("preview routes use empty-shell navigation instead of leaking preview ids into product flow", () => {
   assert.match(runPageSource, /buildAppShellState\(preview \? "\/runs" : `\/runs\/\$\{runId\}`/);
   assert.match(resultsPageSource, /buildAppShellState\(preview \? "\/courses\/results" : `\/courses\/\$\{courseId\}\/results`/);

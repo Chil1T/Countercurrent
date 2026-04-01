@@ -15,6 +15,33 @@ export type ArtifactContent = {
   content: string;
 };
 
+export type ResultsSnapshotFile = {
+  path: string;
+  kind: string;
+  size: number;
+};
+
+export type ResultsSnapshotChapter = {
+  chapter_id: string;
+  files: ResultsSnapshotFile[];
+};
+
+export type ResultsSnapshotRun = {
+  run_id: string;
+  chapters: ResultsSnapshotChapter[];
+};
+
+export type ResultsSnapshotCourse = {
+  course_id: string;
+  runs: ResultsSnapshotRun[];
+};
+
+export type ResultsSnapshot = {
+  current_course_id: string;
+  current_course_runs: ResultsSnapshotRun[];
+  historical_courses: ResultsSnapshotCourse[];
+};
+
 export type ReviewSummary = {
   course_id: string;
   report_count: number;
@@ -76,6 +103,48 @@ export async function getReviewSummary(courseId: string): Promise<ReviewSummary>
     throw new Error(`Failed to load review summary: ${response.status}`);
   }
   return (await response.json()) as ReviewSummary;
+}
+
+export async function getResultsSnapshot(courseId: string): Promise<ResultsSnapshot> {
+  const response = await fetch(`${API_BASE_URL}/courses/${courseId}/results-snapshot`, {
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load results snapshot: ${response.status}`);
+  }
+  return (await response.json()) as ResultsSnapshot;
+}
+
+export type ResultsSnapshotContentRequest = {
+  sourceCourseId?: string | null;
+  runId: string;
+  path: string;
+};
+
+export function buildResultsSnapshotContentUrl(
+  courseId: string,
+  request: ResultsSnapshotContentRequest,
+): string {
+  const params = new URLSearchParams();
+  if (request.sourceCourseId) {
+    params.set("source_course_id", request.sourceCourseId);
+  }
+  params.set("run_id", request.runId);
+  params.set("path", request.path);
+  return `${API_BASE_URL}/courses/${courseId}/results-snapshot/content?${params.toString()}`;
+}
+
+export async function getResultsSnapshotContent(
+  courseId: string,
+  request: ResultsSnapshotContentRequest,
+): Promise<ArtifactContent> {
+  const response = await fetch(buildResultsSnapshotContentUrl(courseId, request), {
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load results snapshot content: ${response.status}`);
+  }
+  return (await response.json()) as ArtifactContent;
 }
 
 export function buildExportUrl(

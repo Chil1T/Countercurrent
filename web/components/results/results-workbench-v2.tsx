@@ -3,12 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  getArtifactContent,
-  getArtifactTree,
+  getResultsSnapshot,
+  getResultsSnapshotContent,
   getReviewSummary,
   type ArtifactContent,
-  type ArtifactNode,
   type ReviewSummary,
+  type ResultsSnapshot,
 } from "@/lib/api/artifacts";
 import {
   getCourseResultsContext,
@@ -19,16 +19,18 @@ import {
 } from "@/lib/api/runs";
 import { shouldRefreshArtifactsOnRunUpdate } from "@/lib/results-refresh";
 import {
-  buildArtifactTree,
-  findArtifactTreeNodeByPath,
-  getArtifactTreePathAncestors,
+  buildResultsSnapshotSelection,
+  buildResultsSnapshotTree,
+  findResultsTreeNodeBySelection,
+  getResultsTreeSelectionAncestors,
   isArtifactTreeLoading,
-  type ArtifactTreeNode,
+  type ResultsTreeNode,
+  type ResultsTreeSection,
 } from "@/lib/results-view";
 import type { ResultsWorkbenchPreview } from "@/lib/preview/workbench";
 import { ResultsV2Sections } from "@/components/results/results-v2-sections";
 
-function collectExpandableKeys(nodes: ArtifactTreeNode[]): string[] {
+function collectExpandableKeys(nodes: ResultsTreeNode[]): string[] {
   const keys: string[] = [];
 
   for (const node of nodes) {
@@ -41,7 +43,7 @@ function collectExpandableKeys(nodes: ArtifactTreeNode[]): string[] {
   return keys;
 }
 
-function collectTreeSectionKeys(sections: ReturnType<typeof buildArtifactTree>): string[] {
+function collectTreeSectionKeys(sections: ResultsTreeSection[]): string[] {
   const keys: string[] = [];
 
   for (const section of sections) {
@@ -52,29 +54,58 @@ function collectTreeSectionKeys(sections: ReturnType<typeof buildArtifactTree>):
   return keys;
 }
 
-function findFirstSelectablePath(nodes: ArtifactTreeNode[]): string | null {
+function findFirstSelectableSelection(nodes: ResultsTreeNode[]): string | null {
   for (const node of nodes) {
     if ("path" in node) {
-      return node.path;
+      return node.key;
     }
-    const childPath = findFirstSelectablePath(node.children);
-    if (childPath) {
-      return childPath;
+    const childSelection = findFirstSelectableSelection(node.children);
+    if (childSelection) {
+      return childSelection;
     }
   }
 
   return null;
 }
 
-async function loadArtifactSnapshot(courseId: string, runId?: string | null) {
-  const [tree, summary, context, nextRun] = await Promise.all([
-    getArtifactTree(courseId),
+function buildPreviewSnapshot(preview: ResultsWorkbenchPreview): ResultsSnapshot {
+  const chapterFiles = preview.nodes
+    .filter((node) => node.path.startsWith("chapters/") && node.path.endsWith(".md"))
+    .map((node) => ({
+      chapter_id: node.path.split("/")[1] ?? "chapter",
+      file: node,
+    }));
+  const chapterMap = new Map<string, Array<{ path: string; kind: string; size: number }>>();
+  for (const entry of chapterFiles) {
+    const files = chapterMap.get(entry.chapter_id) ?? [];
+    files.push(entry.file);
+    chapterMap.set(entry.chapter_id, files);
+  }
+
+  return {
+    current_course_id: preview.context?.course_id ?? "preview-course",
+    current_course_runs: [
+      {
+        run_id: preview.run?.id ?? "preview-run",
+        chapters: [...chapterMap.entries()].map(([chapterId, files]) => ({
+          chapter_id: chapterId,
+          files,
+        })),
+      },
+    ],
+    historical_courses: [],
+  };
+}
+
+async function loadResultsSnapshot(courseId: string, runId?: string | null) {
+  const [snapshot, summary, context, nextRun] = await Promise.all([
+    getResultsSnapshot(courseId),
     getReviewSummary(courseId),
     getCourseResultsContext(courseId).catch(() => null),
     runId ? getRun(runId).catch(() => null) : Promise.resolve(null),
   ]);
 
-  return { tree, summary, context, nextRun };
+  return { snapshot, summary, context, nextRun };
 }
 
 export function ResultsWorkbenchV2({
@@ -82,25 +113,30 @@ export function ResultsWorkbenchV2({
   runId,
   preview,
 }: {
-  courseId: string;
+  courseId: string | null;
   runId?: string | null;
   preview?: ResultsWorkbenchPreview | null;
 }) {
   const isPreview = !!preview;
-  const initialPreviewTree = preview ? buildArtifactTree(preview.nodes) : [];
-  const initialPreviewPath = preview ? (findFirstSelectablePath(initialPreviewTree) ?? null) : null;
-  const [nodes, setNodes] = useState<ArtifactNode[]>(preview?.nodes ?? []);
+  const initialPreviewSnapshot = preview ? buildPreviewSnapshot(preview) : null;
+  const initialPreviewTree = initialPreviewSnapshot ? buildResultsSnapshotTree(initialPreviewSnapshot, preview?.run?.id ?? null) : [];
+  const initialPreviewSelection = initialPreviewTree.length > 0 ? findFirstSelectableSelection(initialPreviewTree[0]?.children ?? []) ?? findFirstSelectableSelection(initialPreviewTree[1]?.children ?? []) : null;
+
+  const [snapshot, setSnapshot] = useState<ResultsSnapshot | null>(initialPreviewSnapshot);
   const [run, setRun] = useState<RunSession | null>(preview?.run ?? null);
   const [context, setContext] = useState<CourseResultsContext | null>(preview?.context ?? null);
-  const [selectedPath, setSelectedPath] = useState<string | null>(initialPreviewPath);
+  const [selectedSelection, setSelectedSelection] = useState<string | null>(initialPreviewSelection);
   const [content, setContent] = useState<ArtifactContent | null>(
-    initialPreviewPath && preview ? (preview.contentByPath[initialPreviewPath] ?? null) : null,
+    initialPreviewSelection && preview
+      ? (() => {
+          const node = findResultsTreeNodeBySelection(initialPreviewTree, initialPreviewSelection);
+          return node && "path" in node ? (preview.contentByPath[node.path] ?? null) : null;
+        })()
+      : null,
   );
-  const [reviewSummary, setReviewSummary] = useState<ReviewSummary | null>(
-    preview?.reviewSummary ?? null,
-  );
+  const [reviewSummary, setReviewSummary] = useState<ReviewSummary | null>(preview?.reviewSummary ?? null);
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(
-    () => new Set(preview ? collectTreeSectionKeys(initialPreviewTree) : []),
+    () => new Set(isPreview ? collectTreeSectionKeys(initialPreviewTree) : ["historical-courses", "current-course"]),
   );
   const [error, setError] = useState<string | null>(null);
   const [exportCompletedOnly, setExportCompletedOnly] = useState(false);
@@ -108,38 +144,34 @@ export function ResultsWorkbenchV2({
   const previousRunRef = useRef<RunSession | null>(null);
 
   useEffect(() => {
-    if (preview) {
+    if (preview || !courseId) {
       return;
     }
     let cancelled = false;
 
-    async function refreshArtifacts(preserveSelection: boolean) {
+    async function refreshSnapshot() {
       setError(null);
       try {
-        const { tree, summary, context, nextRun } = await loadArtifactSnapshot(courseId, runId);
+        const { snapshot, summary, context, nextRun } = await loadResultsSnapshot(courseId, runId);
         if (cancelled) {
           return;
         }
-        setNodes(tree.nodes);
+        setSnapshot(snapshot);
         setReviewSummary(summary);
         setContext(context);
         setRun(nextRun);
         previousRunRef.current = nextRun;
 
-        const nextTree = buildArtifactTree(tree.nodes);
-        const firstPreviewable = findFirstSelectablePath(nextTree) ?? null;
-        const nextExpandedKeys = new Set(collectTreeSectionKeys(nextTree));
-        setExpandedKeys((current) => {
-          if (!preserveSelection) {
-            return nextExpandedKeys;
+        const nextTree = buildResultsSnapshotTree(snapshot, runId);
+        const firstSelection =
+          findFirstSelectableSelection(nextTree[0]?.children ?? []) ??
+          findFirstSelectableSelection(nextTree[1]?.children ?? []) ??
+          null;
+        setSelectedSelection((current) => {
+          if (!current) {
+            return firstSelection;
           }
-          return new Set([...current, ...nextExpandedKeys]);
-        });
-        setSelectedPath((current) => {
-          if (!preserveSelection || !current) {
-            return firstPreviewable;
-          }
-          return findArtifactTreeNodeByPath(nextTree, current) ? current : firstPreviewable;
+          return findResultsTreeNodeBySelection(nextTree, current) ? current : firstSelection;
         });
       } catch (loadError) {
         if (!cancelled) {
@@ -148,7 +180,7 @@ export function ResultsWorkbenchV2({
       }
     }
 
-    void refreshArtifacts(false);
+    void refreshSnapshot();
 
     return () => {
       cancelled = true;
@@ -156,7 +188,7 @@ export function ResultsWorkbenchV2({
   }, [courseId, preview, runId]);
 
   useEffect(() => {
-    if (preview || !runId) {
+    if (preview || !courseId || !runId) {
       return;
     }
     let cancelled = false;
@@ -168,23 +200,14 @@ export function ResultsWorkbenchV2({
         }
 
         if (shouldRefreshArtifactsOnRunUpdate(previousRunRef.current, nextRun)) {
-          void loadArtifactSnapshot(courseId, runId)
-            .then(({ tree, summary, context }) => {
+          void loadResultsSnapshot(courseId, runId)
+            .then(({ snapshot, summary, context }) => {
               if (cancelled) {
                 return;
               }
-              setNodes(tree.nodes);
+              setSnapshot(snapshot);
               setReviewSummary(summary);
               setContext(context);
-
-              const nextTree = buildArtifactTree(tree.nodes);
-              const firstPreviewable = findFirstSelectablePath(nextTree) ?? null;
-              setSelectedPath((current) => {
-                if (!current) {
-                  return firstPreviewable;
-                }
-                return findArtifactTreeNodeByPath(nextTree, current) ? current : firstPreviewable;
-              });
             })
             .catch((loadError) => {
               if (!cancelled) {
@@ -205,15 +228,27 @@ export function ResultsWorkbenchV2({
   }, [courseId, preview, runId]);
 
   useEffect(() => {
-    if (preview || !selectedPath) {
+    if (!courseId || !selectedSelection) {
       return;
     }
+    const selectedNode = findResultsTreeNodeBySelection(treeSections, selectedSelection);
+    if (!selectedNode || !("path" in selectedNode)) {
+      return;
+    }
+    if (preview) {
+      setContent(preview.contentByPath[selectedNode.path] ?? null);
+      return;
+    }
+
     let cancelled = false;
-    const path = selectedPath;
 
     async function loadContent() {
       try {
-        const nextContent = await getArtifactContent(courseId, path);
+        const nextContent = await getResultsSnapshotContent(courseId, {
+          sourceCourseId: selectedNode.sourceCourseId === "__current__" ? null : selectedNode.sourceCourseId,
+          runId: selectedNode.runId,
+          path: selectedNode.path,
+        });
         if (!cancelled) {
           setContent(nextContent);
         }
@@ -229,22 +264,21 @@ export function ResultsWorkbenchV2({
     return () => {
       cancelled = true;
     };
-  }, [courseId, preview, selectedPath]);
+  }, [courseId, preview, preview?.contentByPath, selectedSelection]);
 
-  const treeSections = useMemo(() => buildArtifactTree(nodes), [nodes]);
+  const treeSections = useMemo(
+    () => buildResultsSnapshotTree(snapshot ?? { current_course_id: courseId ?? "unbound-course", current_course_runs: [], historical_courses: [] }, runId ?? null),
+    [courseId, runId, snapshot],
+  );
   const chapterStatusMap = useMemo(() => {
     const activeChapterProgress = context?.latest_run?.chapter_progress ?? [];
     return new Map(activeChapterProgress.map((chapter) => [chapter.chapter_id, chapter.status]));
   }, [context?.latest_run?.chapter_progress]);
-  const loadingArtifacts = isPreview ? false : isArtifactTreeLoading(context?.latest_run?.status);
-  const previewContent = selectedPath
-    ? isPreview
-      ? (preview?.contentByPath[selectedPath] ?? null)
-      : content
-    : null;
+  const loadingArtifacts = isPreview || !courseId ? false : isArtifactTreeLoading(context?.latest_run?.status);
+  const previewContent = selectedSelection ? content : null;
   const exportCacheBust = useMemo(
-    () => `${nodes.length}-${reviewSummary?.report_count ?? 0}-${reviewSummary?.issue_count ?? 0}`,
-    [nodes.length, reviewSummary?.issue_count, reviewSummary?.report_count],
+    () => `${snapshot?.current_course_runs.length ?? 0}-${reviewSummary?.report_count ?? 0}-${reviewSummary?.issue_count ?? 0}`,
+    [reviewSummary?.issue_count, reviewSummary?.report_count, snapshot?.current_course_runs.length],
   );
   const scopedRunLabel = runId && run ? `Scoped view · ${run.id.slice(0, 8)} · ${run.status}` : null;
   const courseViewLabel = context?.latest_run ? "Course view · latest state" : null;
@@ -265,7 +299,7 @@ export function ResultsWorkbenchV2({
       isPreview={isPreview}
       treeSections={treeSections}
       expandedKeys={expandedKeys}
-      selectedPath={selectedPath}
+      selectedSelection={selectedSelection}
       chapterStatusMap={chapterStatusMap}
       previewContent={previewContent}
       reviewSummary={reviewSummary}
@@ -297,11 +331,11 @@ export function ResultsWorkbenchV2({
           return next;
         });
       }}
-      onSelectFile={(path) => {
-        setSelectedPath(path);
+      onSelectFile={(selection) => {
+        setSelectedSelection(selection);
         setExpandedKeys((current) => {
           const next = new Set(current);
-          for (const key of getArtifactTreePathAncestors(path)) {
+          for (const key of getResultsTreeSelectionAncestors(selection)) {
             next.add(key);
           }
           return next;

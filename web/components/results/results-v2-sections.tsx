@@ -2,8 +2,8 @@
 
 import { ArtifactContent, ReviewSummary, buildExportUrl } from "@/lib/api/artifacts";
 import {
-  ArtifactTreeNode,
-  ArtifactTreeSection,
+  ResultsTreeNode,
+  ResultsTreeSection,
   getArtifactDisplayName,
   getArtifactTreeCardClass,
 } from "@/lib/results-view";
@@ -13,25 +13,25 @@ import { StatusChip } from "@/components/stitch-v2/status-chip";
 function TreeNode({
   node,
   depth,
-  selectedPath,
+  selectedSelection,
   expandedKeys,
   chapterStatusMap,
   onToggleFolder,
   onSelectFile,
 }: {
-  node: ArtifactTreeNode;
+  node: ResultsTreeNode;
   depth: number;
-  selectedPath: string | null;
+  selectedSelection: string | null;
   expandedKeys: Set<string>;
   chapterStatusMap?: Map<string, string>;
   onToggleFolder: (key: string) => void;
-  onSelectFile: (path: string) => void;
+  onSelectFile: (selection: string) => void;
 }) {
   const isFolder = "children" in node;
-  const isActive = isFolder ? expandedKeys.has(node.key) : node.path === selectedPath;
+  const isActive = isFolder ? expandedKeys.has(node.key) : node.key === selectedSelection;
   const chapterStatus =
-    isFolder && depth === 0 && chapterStatusMap?.has(node.key)
-      ? chapterStatusMap.get(node.key)
+    isFolder && depth === 1 && chapterStatusMap?.has(node.label)
+      ? chapterStatusMap.get(node.label)
       : null;
 
   return (
@@ -43,7 +43,7 @@ function TreeNode({
             onToggleFolder(node.key);
             return;
           }
-          onSelectFile(node.path);
+          onSelectFile(node.key);
         }}
         className={`flex w-full min-w-0 items-center justify-between gap-3 overflow-hidden rounded-2xl px-4 py-3 text-left transition ${getArtifactTreeCardClass(
           node.key,
@@ -79,7 +79,7 @@ function TreeNode({
               key={child.key}
               node={child}
               depth={depth + 1}
-              selectedPath={selectedPath}
+              selectedSelection={selectedSelection}
               expandedKeys={expandedKeys}
               chapterStatusMap={chapterStatusMap}
               onToggleFolder={onToggleFolder}
@@ -99,7 +99,7 @@ export function ResultsV2Sections({
   isPreview,
   treeSections,
   expandedKeys,
-  selectedPath,
+  selectedSelection,
   chapterStatusMap,
   previewContent,
   reviewSummary,
@@ -115,13 +115,13 @@ export function ResultsV2Sections({
   onExportCompletedOnlyChange,
   onExportFinalOnlyChange,
 }: {
-  courseId: string;
+  courseId: string | null;
   runId?: string | null;
   previewScenario?: string;
   isPreview: boolean;
-  treeSections: ArtifactTreeSection[];
+  treeSections: ResultsTreeSection[];
   expandedKeys: Set<string>;
-  selectedPath: string | null;
+  selectedSelection: string | null;
   chapterStatusMap: Map<string, string>;
   previewContent: ArtifactContent | null;
   reviewSummary: ReviewSummary | null;
@@ -133,7 +133,7 @@ export function ResultsV2Sections({
   courseViewLabel: string | null;
   onToggleSection: (key: string) => void;
   onToggleFolder: (key: string) => void;
-  onSelectFile: (path: string) => void;
+  onSelectFile: (selection: string) => void;
   onExportCompletedOnlyChange: (checked: boolean) => void;
   onExportFinalOnlyChange: (checked: boolean) => void;
 }) {
@@ -145,13 +145,16 @@ export function ResultsV2Sections({
             <div className="flex flex-wrap items-center gap-3">
               <StatusChip label="Results Control Center" tone="accent" />
               <StatusChip label="Course Latest View" />
-              {runId ? <StatusChip label="Scoped Run Attached" tone="muted" /> : null}
+              {runId ? <StatusChip label="当前 run 已附着" tone="muted" /> : null}
             </div>
             <h3 className="font-stitch-headline mt-5 text-4xl font-black tracking-[-0.05em] text-stone-900 md:text-5xl">
-              结果树、预览和导出保持真实语义，只升级展示层。
+              结果树现在按课程与 run 快照组织，只显示最终 Markdown 产物。
             </h3>
             <p className="mt-5 max-w-3xl text-sm leading-8 text-stone-600 md:text-base">
-              章节状态继续来自课程级 latest run，Scoped run 只保留标签提示。过滤导出、文件刷新和当前预览文件选择稳定性都保持现有合同。
+              过去课程与当前课程分层展示，当前课程内部按 run 和章节展开；当前 run 只做标记，不再把 intermediate 或 runtime 文件混进主树。
+            </p>
+            <p className="mt-2 text-xs uppercase tracking-[0.18em] text-stone-400">
+              过去课程产物 / 当前课程产物 / 当前 run
             </p>
 
             <div className="mt-6 flex flex-wrap gap-3">
@@ -202,7 +205,7 @@ export function ResultsV2Sections({
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="font-stitch-label text-[11px] uppercase tracking-[0.28em] text-[var(--stitch-shell-primary-strong)]">
-                  Artifact Tree
+                  Snapshot Tree
                 </p>
                 <h4 className="font-stitch-headline mt-3 text-2xl font-black tracking-[-0.04em] text-stone-900">
                   文件树
@@ -241,7 +244,7 @@ export function ResultsV2Sections({
                               key={node.key}
                               node={node}
                               depth={0}
-                              selectedPath={selectedPath}
+                              selectedSelection={selectedSelection}
                               expandedKeys={expandedKeys}
                               chapterStatusMap={chapterStatusMap}
                               onToggleFolder={onToggleFolder}
@@ -291,7 +294,7 @@ export function ResultsV2Sections({
               </label>
             </div>
             <div className="mt-5">
-              {isPreview ? (
+              {isPreview || !courseId ? (
                 <button
                   type="button"
                   disabled
@@ -334,7 +337,7 @@ export function ResultsV2Sections({
                   {previewContent ? getArtifactDisplayName(previewContent.path) : "请选择文件"}
                 </div>
                 <div className="mt-1 truncate text-xs leading-6 text-stone-500">
-                  {previewContent?.path ?? "路径会显示在这里"}
+                  {previewContent?.path ?? (courseId ? "当前仅展示 Markdown 快照路径" : "等待课程上下文后显示路径")}
                 </div>
               </div>
             </div>
