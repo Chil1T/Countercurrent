@@ -16,6 +16,13 @@ test("config workbench uses the localized review copy", () => {
   );
 });
 
+test("config workbench exposes english copy through the locale dictionary", () => {
+  const copy = getConfigWorkbenchCopy("en");
+
+  assert.equal(copy.reviewEnabledLabel, "Enable Review");
+  assert.equal(copy.runtimeDefaultsTitle, "AI Service Configuration");
+});
+
 test("config workbench keeps course overrides behind advanced settings by default", () => {
   const copy = getConfigWorkbenchCopy();
   const layout = getConfigWorkbenchLayout();

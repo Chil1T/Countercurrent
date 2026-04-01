@@ -1,5 +1,5 @@
-import { OverviewWorkbenchV2 } from "@/components/overview/overview-workbench-v2";
+import { StitchV4OverviewPage } from "@/components/stitch-v4/overview-page";
 
 export default function Home() {
-  return <OverviewWorkbenchV2 />;
+  return <StitchV4OverviewPage context={{}} />;
 }

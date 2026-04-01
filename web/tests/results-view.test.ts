@@ -49,7 +49,7 @@ test("artifact cards stay neutral until selected", () => {
   );
 });
 
-test("artifact tree nests chapter files under final and intermediate folders", () => {
+test("legacy artifact tree still groups final and intermediate files for compatibility helpers", () => {
   const tree = buildArtifactTree([
     {
       path: "chapters/chapter-01/notebooklm/03-面试问答.md",
@@ -169,6 +169,21 @@ test("results snapshot tree groups historical courses and current course runs wh
   assert.equal(tree[0]?.label, "过去课程产物");
   assert.equal(tree[1]?.label, "当前课程产物");
   assert.equal(tree[1]?.children[0]?.key, "run-current-001");
+});
+
+test("results snapshot tree section labels follow the selected locale", () => {
+  const tree = buildResultsSnapshotTree(
+    {
+      current_course_id: "database-course",
+      current_course_runs: [],
+      historical_courses: [],
+    },
+    null,
+    "en",
+  );
+
+  assert.equal(tree[0]?.label, "Past Course Outputs");
+  assert.equal(tree[1]?.label, "Current Course Outputs");
 });
 
 test("results snapshot selection ancestors expand course, run, and chapter folders", () => {

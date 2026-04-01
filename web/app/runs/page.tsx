@@ -1,38 +1,22 @@
-import { AppShell } from "@/components/app-shell";
-import { RunSessionWorkbenchV2 } from "@/components/run/run-session-workbench-v2";
-import { buildAppShellState } from "@/lib/app-shell-state";
+import { StitchV4RunPage } from "@/components/stitch-v4/run-page";
 
 export default async function RunsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ draftId?: string; courseId?: string }>;
+  searchParams: Promise<{ draftId?: string; courseId?: string; runId?: string }>;
 }) {
   const resolvedSearchParams = await searchParams;
-  const shellSearchParams = new URLSearchParams();
-  if (resolvedSearchParams.draftId) {
-    shellSearchParams.set("draftId", resolvedSearchParams.draftId);
-  }
-  if (resolvedSearchParams.courseId) {
-    shellSearchParams.set("courseId", resolvedSearchParams.courseId);
-  }
-
   return (
-    <AppShell
-      eyebrow="Step 3"
-      title="运行页"
-      shellState={buildAppShellState("/runs", shellSearchParams)}
-      contextIds={{
+    <StitchV4RunPage
+      context={{
         draftId: resolvedSearchParams.draftId ?? null,
-        runId: null,
+        runId: resolvedSearchParams.runId ?? null,
         courseId: resolvedSearchParams.courseId ?? null,
       }}
-    >
-      <RunSessionWorkbenchV2
-        initialState={{
-          draft_id: resolvedSearchParams.draftId ?? null,
-          course_id: resolvedSearchParams.courseId ?? null,
-        }}
-      />
-    </AppShell>
+      initialState={{
+        draft_id: resolvedSearchParams.draftId ?? null,
+        course_id: resolvedSearchParams.courseId ?? null,
+      }}
+    />
   );
 }

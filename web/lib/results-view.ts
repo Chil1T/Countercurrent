@@ -1,6 +1,8 @@
 import type { ArtifactNode } from "@/lib/api/artifacts";
 import type { ResultsSnapshot } from "@/lib/api/artifacts";
 
+type Locale = "zh-CN" | "en";
+
 type ArtifactTreeFileNode = {
   key: string;
   label: string;
@@ -143,10 +145,13 @@ function buildRunTreeNodes(
   runId: string,
   chapters: Array<{ chapter_id: string; files: Array<{ path: string; kind: string; size: number }> }>,
   markCurrentRun: boolean,
+  locale: Locale,
 ): ResultsTreeFolderNode {
   return {
     key: runId,
-    label: markCurrentRun ? `${runId} · 当前 run` : runId,
+    label: markCurrentRun
+      ? `${runId} · ${locale === "zh-CN" ? "当前 run" : "Current run"}`
+      : runId,
     children: chapters.map((chapter) => ({
       key: `${runId}:${chapter.chapter_id}`,
       label: chapter.chapter_id,
@@ -170,28 +175,30 @@ function buildRunTreeNodes(
 export function buildResultsSnapshotTree(
   snapshot: ResultsSnapshot,
   currentRunId: string | null = null,
+  locale: Locale = "zh-CN",
 ): ResultsTreeSection[] {
   return [
     {
       key: "historical-courses",
-      label: "过去课程产物",
+      label: locale === "zh-CN" ? "过去课程产物" : "Past Course Outputs",
       children: snapshot.historical_courses.map((course) => ({
         key: course.course_id,
         label: course.course_id,
         children: course.runs.map((run) =>
-          buildRunTreeNodes(course.course_id, run.run_id, run.chapters, false),
+          buildRunTreeNodes(course.course_id, run.run_id, run.chapters, false, locale),
         ),
       })),
     },
     {
       key: "current-course",
-      label: "当前课程产物",
+      label: locale === "zh-CN" ? "当前课程产物" : "Current Course Outputs",
       children: snapshot.current_course_runs.map((run) =>
         buildRunTreeNodes(
           "__current__",
           run.run_id,
           run.chapters,
           currentRunId === run.run_id,
+          locale,
         ),
       ),
     },
