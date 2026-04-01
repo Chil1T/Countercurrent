@@ -145,7 +145,7 @@ test("app shell uses top sticky navigation with a fixed right summary rail", () 
   assert.equal(appShellSource.includes("ShellSidebar"), true);
   assert.equal(appShellSource.includes("PageHero"), true);
   assert.equal(appShellSource.includes("SurfaceCard"), true);
-  assert.equal(appShellSource.includes("xl:grid-cols-[minmax(0,1fr)_320px]"), true);
+  assert.equal(appShellSource.includes("xl:grid-cols-[240px_minmax(0,1fr)_320px]"), true);
   assert.equal(appShellSource.includes("sticky top-24"), true);
   assert.equal(appShellSource.includes("打开阶段导航"), false);
   assert.equal(appShellSource.includes("打开摘要面板"), false);

@@ -7,14 +7,14 @@ export function StatusChip({
 }) {
   const toneClass =
     tone === "accent"
-      ? "border-[var(--stitch-shell-primary)] bg-[var(--stitch-shell-primary-soft)] text-[var(--stitch-shell-primary-strong)]"
+      ? "border-[var(--stitch-shell-primary)] bg-[var(--stitch-primary-fixed)] text-[var(--stitch-shell-primary-strong)]"
       : tone === "muted"
-        ? "border-stone-200 bg-stone-100 text-stone-500"
-        : "border-stone-200 bg-white text-stone-700";
+        ? "border-[var(--stitch-outline-variant)] bg-[var(--stitch-surface-container)] text-[var(--stitch-on-secondary-container)]"
+        : "border-[var(--stitch-outline-variant)] bg-[var(--stitch-surface-container-lowest)] text-[var(--stitch-on-surface-variant)]";
 
   return (
     <span
-      className={`inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] ${toneClass}`}
+      className={`inline-flex items-center rounded-xl border px-3 py-1.5 font-stitch-label text-[10px] font-bold uppercase tracking-[0.24em] ${toneClass}`}
     >
       {label}
     </span>

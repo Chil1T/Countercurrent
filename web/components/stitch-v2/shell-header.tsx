@@ -1,5 +1,7 @@
 import Image from "next/image";
 
+import { MaterialSymbol } from "@/components/stitch-v2/material-symbol";
+import { ShellAction } from "@/components/stitch-v2/shell-action";
 import { StatusChip } from "@/components/stitch-v2/status-chip";
 
 export function ShellHeader({
@@ -10,32 +12,50 @@ export function ShellHeader({
   statusLabel: string;
 }) {
   return (
-    <header className="sticky top-0 z-40 border-b border-[var(--stitch-shell-border)] bg-[color:var(--stitch-shell-backdrop)]/92 backdrop-blur-xl">
-      <div className="mx-auto flex w-[95vw] max-w-[1920px] items-center justify-between gap-4 px-3 py-3 md:px-4 lg:px-5">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-2xl border border-[var(--stitch-shell-border)] bg-white shadow-sm">
+    <header className="fixed top-0 z-50 w-full bg-[var(--stitch-background)]/80 backdrop-blur-xl">
+      <div className="mx-auto flex w-full max-w-full items-center justify-between gap-4 px-4 py-4 md:px-8">
+        <div className="flex min-w-0 items-center gap-6">
+          <div className="flex min-w-0 items-center gap-3">
             <Image
               src="/countercurrent-logo.svg"
               alt="ReCurr logo"
               width={44}
               height={44}
-              className="h-11 w-11"
+              className="h-8 w-auto"
               priority
             />
-          </div>
-          <div className="min-w-0">
-            <p className="font-stitch-headline text-xl font-black tracking-[-0.08em] text-[var(--stitch-shell-primary-strong)]">
+            <p className="font-stitch-headline text-2xl font-black tracking-tight text-[var(--stitch-shell-primary-strong)]">
               ReCurr
             </p>
-            <p className="font-stitch-label text-[11px] uppercase tracking-[0.26em] text-stone-500">
-              Course Production Workbench
-            </p>
           </div>
+
+          <nav className="hidden items-center gap-8 md:flex">
+            <span className="border-b-2 border-[var(--stitch-shell-primary)] pb-1 font-stitch-body text-sm font-bold text-[var(--stitch-shell-primary)]">
+              Curriculum
+            </span>
+            <span className="font-stitch-body text-sm font-medium text-[var(--stitch-on-secondary-container)]">
+              Assets
+            </span>
+            <span className="font-stitch-body text-sm font-medium text-[var(--stitch-on-secondary-container)]">
+              Settings
+            </span>
+          </nav>
         </div>
 
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-4">
           <StatusChip label={`Course · ${courseLabel}`} />
           <StatusChip label={`View · ${statusLabel}`} tone="accent" />
+          <div className="hidden items-center gap-2 md:flex">
+            <button type="button" className="p-2 text-[var(--stitch-on-surface-variant)] transition-colors hover:text-[var(--stitch-shell-primary)]">
+              <MaterialSymbol name="notifications" />
+            </button>
+            <button type="button" className="p-2 text-[var(--stitch-on-surface-variant)] transition-colors hover:text-[var(--stitch-shell-primary)]">
+              <MaterialSymbol name="account_circle" />
+            </button>
+          </div>
+          <ShellAction tone="primary" icon={<MaterialSymbol name="publish" className="text-base" />}>
+            Publish
+          </ShellAction>
         </div>
       </div>
     </header>

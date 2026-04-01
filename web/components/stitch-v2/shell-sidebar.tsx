@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { MaterialSymbol } from "@/components/stitch-v2/material-symbol";
+import { ShellAction } from "@/components/stitch-v2/shell-action";
 import { AppShellState } from "@/lib/app-shell-state";
 
 export function ShellSidebar({
@@ -10,50 +12,71 @@ export function ShellSidebar({
   courseLabel: string;
 }) {
   return (
-    <aside className="rounded-[30px] border border-[var(--stitch-shell-border)] bg-[var(--stitch-shell-panel-soft)] p-4 shadow-[var(--stitch-shell-shadow)] xl:sticky xl:top-24 xl:self-start">
-      <div className="rounded-[22px] bg-white px-4 py-4 shadow-sm">
-        <p className="font-stitch-label text-[11px] uppercase tracking-[0.28em] text-stone-500">
-          Project Workspace
-        </p>
-        <p className="mt-2 truncate text-sm font-medium text-stone-800">{courseLabel}</p>
+    <aside className="hidden h-screen w-64 flex-col bg-[var(--stitch-surface-container-highest)] p-4 pt-20 md:flex xl:sticky xl:top-0 xl:self-start">
+      <div className="mb-8 px-2">
+        <div className="flex items-center gap-3 rounded-xl bg-[var(--stitch-surface-container-lowest)] p-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[color:var(--stitch-shell-primary-soft)]">
+            <MaterialSymbol name="auto_stories" className="text-[var(--stitch-shell-primary)]" />
+          </div>
+          <div className="min-w-0">
+            <p className="font-stitch-label text-xs font-bold uppercase tracking-widest text-[var(--stitch-shell-primary-strong)]">
+              Project Workspace
+            </p>
+            <p className="truncate text-[10px] font-medium text-[var(--stitch-on-secondary-container)]">
+              {courseLabel}
+            </p>
+          </div>
+        </div>
       </div>
 
-      <nav className="mt-4 space-y-2">
+      <nav className="flex-1 space-y-1">
         {navItems.map((item) =>
           item.enabled && item.href ? (
             <Link
               key={item.label}
               href={item.href}
-              className="group flex items-start gap-3 rounded-[22px] border border-transparent bg-white/60 px-4 py-4 transition hover:border-[var(--stitch-shell-border-strong)] hover:bg-white"
+              className="flex items-center gap-3 border-r-4 px-4 py-3 font-stitch-label text-xs font-bold uppercase tracking-widest transition-all first:border-[var(--stitch-shell-primary)] first:bg-[color:var(--stitch-background)]/50 first:text-[var(--stitch-shell-primary-strong)] not-first:border-transparent text-[var(--stitch-on-secondary-container)] hover:bg-[var(--stitch-surface-container-low)]"
             >
-              <span className="font-stitch-headline text-2xl font-black tracking-[-0.08em] text-[var(--stitch-shell-primary)]/55 group-hover:text-[var(--stitch-shell-primary)]">
-                {item.step}
-              </span>
+              <MaterialSymbol
+                name={
+                  item.step === "01"
+                    ? "list_alt"
+                    : item.step === "02"
+                      ? "layers"
+                      : item.step === "03"
+                        ? "folder_open"
+                        : "visibility"
+                }
+              />
               <span className="min-w-0">
-                <span className="block text-sm font-semibold text-stone-900">{item.label}</span>
-                <span className="mt-1 block text-xs uppercase tracking-[0.18em] text-stone-500">
-                  {item.hint}
-                </span>
+                <span>{item.label}</span>
               </span>
             </Link>
           ) : (
             <div
               key={item.label}
-              className="flex items-start gap-3 rounded-[22px] border border-dashed border-stone-200 bg-stone-100/75 px-4 py-4 text-stone-400"
+              className="flex items-center gap-3 px-4 py-3 font-stitch-label text-xs font-bold uppercase tracking-widest text-stone-400"
             >
-              <span className="font-stitch-headline text-2xl font-black tracking-[-0.08em]">
-                {item.step}
-              </span>
-              <span className="min-w-0">
-                <span className="block text-sm font-semibold">{item.label}</span>
-                <span className="mt-1 block text-xs uppercase tracking-[0.18em]">
-                  {item.hint}
-                </span>
-              </span>
+              <MaterialSymbol name="radio_button_unchecked" />
+              <span className="min-w-0">{item.label}</span>
             </div>
           ),
         )}
       </nav>
+
+      <div className="mt-auto border-t border-[color:var(--stitch-outline-variant)]/30 pt-4">
+        <ShellAction
+          tone="inverse"
+          className="mb-4 w-full"
+          icon={<MaterialSymbol name="add" className="text-sm" />}
+        >
+          New Chapter
+        </ShellAction>
+        <div className="space-y-1">
+          <ShellAction icon={<MaterialSymbol name="help_outline" className="text-sm" />}>Help</ShellAction>
+          <ShellAction icon={<MaterialSymbol name="archive" className="text-sm" />}>Archive</ShellAction>
+        </div>
+      </div>
     </aside>
   );
 }

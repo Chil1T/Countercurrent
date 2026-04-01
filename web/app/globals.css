@@ -1,25 +1,46 @@
+@import url("https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap");
 @import "tailwindcss";
 
 :root {
-  --background: #ece7dc;
-  --foreground: #231c14;
-  --stitch-shell-backdrop: #fcf9ef;
-  --stitch-shell-panel: rgba(255, 255, 255, 0.94);
-  --stitch-shell-panel-soft: #f4efe5;
-  --stitch-shell-rail: #1f1b16;
-  --stitch-shell-border: rgba(114, 118, 135, 0.18);
-  --stitch-shell-border-strong: rgba(29, 109, 255, 0.18);
-  --stitch-shell-shadow: 0 26px 70px rgba(36, 28, 18, 0.12);
-  --stitch-shell-primary: #1d6dff;
-  --stitch-shell-primary-strong: #0d4fcc;
-  --stitch-shell-primary-soft: rgba(29, 109, 255, 0.1);
+  --background: #fcf9ef;
+  --foreground: #1c1c16;
+  --stitch-background: #fcf9ef;
+  --stitch-surface-container-lowest: #ffffff;
+  --stitch-surface-container-low: #f7f4e9;
+  --stitch-surface-container: #f1eee4;
+  --stitch-surface-container-high: #ebe8de;
+  --stitch-surface-container-highest: #e5e2d9;
+  --stitch-outline: #727687;
+  --stitch-outline-variant: #c2c6d8;
+  --stitch-inverse-surface: #31312a;
+  --stitch-inverse-on-surface: #f4f1e7;
+  --stitch-primary: #0055d4;
+  --stitch-primary-container: #1d6dff;
+  --stitch-primary-fixed: #dae2ff;
+  --stitch-primary-fixed-dim: #b2c5ff;
+  --stitch-on-surface-variant: #424655;
+  --stitch-on-secondary-container: #636262;
+  --stitch-shell-backdrop: var(--stitch-background);
+  --stitch-shell-panel: rgba(255, 255, 255, 0.92);
+  --stitch-shell-panel-soft: var(--stitch-surface-container-low);
+  --stitch-shell-rail: var(--stitch-inverse-surface);
+  --stitch-shell-border: rgba(114, 118, 135, 0.26);
+  --stitch-shell-border-strong: rgba(0, 85, 212, 0.28);
+  --stitch-shell-shadow: 0 18px 44px rgba(28, 28, 22, 0.08);
+  --stitch-shell-primary: var(--stitch-primary);
+  --stitch-shell-primary-strong: var(--stitch-primary-container);
+  --stitch-shell-primary-soft: rgba(29, 109, 255, 0.12);
+  --stitch-shell-radius-sm: 0.5rem;
+  --stitch-shell-radius-md: 0.75rem;
+  --stitch-shell-radius-lg: 1rem;
+  --stitch-shell-radius-xl: 1.5rem;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-stitch-body);
+  --font-mono: var(--font-stitch-body);
 }
 
 @layer base {
@@ -30,11 +51,9 @@
 
   body {
     min-width: 320px;
-    background:
-      radial-gradient(circle at top left, rgba(29, 109, 255, 0.1), transparent 24%),
-      linear-gradient(180deg, #fcf9ef 0%, #f4efe5 100%);
+    background-color: var(--stitch-background);
     color: var(--foreground);
-    font-family: var(--font-geist-sans), sans-serif;
+    font-family: var(--font-stitch-body), sans-serif;
     overflow-x: hidden;
   }
 
@@ -50,11 +69,30 @@
 
 @layer utilities {
   .font-stitch-headline {
-    font-family: var(--font-geist-sans), sans-serif;
-    letter-spacing: -0.04em;
+    font-family: var(--font-stitch-headline-var), sans-serif;
+    letter-spacing: -0.05em;
+  }
+
+  .font-stitch-body {
+    font-family: var(--font-stitch-body), sans-serif;
   }
 
   .font-stitch-label {
-    font-family: var(--font-geist-mono), monospace;
+    font-family: var(--font-stitch-body), sans-serif;
+    letter-spacing: 0.08em;
+  }
+
+  .material-symbols-outlined {
+    font-variation-settings:
+      "FILL" 0,
+      "wght" 500,
+      "GRAD" 0,
+      "opsz" 24;
+    font-family: "Material Symbols Outlined";
+    font-style: normal;
+    line-height: 1;
+    display: inline-block;
+    white-space: nowrap;
+    direction: ltr;
   }
 }

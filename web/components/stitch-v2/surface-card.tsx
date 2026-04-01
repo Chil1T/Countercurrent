@@ -11,14 +11,14 @@ export function SurfaceCard({
 }) {
   const toneClass =
     tone === "muted"
-      ? "bg-[var(--stitch-shell-panel-soft)]"
+      ? "bg-[var(--stitch-surface-container-low)]"
       : tone === "rail"
-        ? "bg-[var(--stitch-shell-rail)] text-stone-100"
+        ? "bg-[var(--stitch-inverse-surface)] text-[var(--stitch-inverse-on-surface)]"
         : "bg-[var(--stitch-shell-panel)]";
 
   return (
     <div
-      className={`rounded-[28px] border border-[var(--stitch-shell-border)] shadow-[var(--stitch-shell-shadow)] ${toneClass} ${className}`}
+      className={`rounded-[var(--stitch-shell-radius-xl)] border border-[var(--stitch-shell-border)] shadow-[var(--stitch-shell-shadow)] ${toneClass} ${className}`}
     >
       {children}
     </div>

@@ -14,14 +14,14 @@ export function EmptyStatePanel({
   actions?: ReactNode;
 }) {
   return (
-    <SurfaceCard className="p-6 md:p-8">
-      <p className="font-stitch-label text-[11px] uppercase tracking-[0.3em] text-[var(--stitch-shell-primary-strong)]">
+    <SurfaceCard className="p-6 md:p-8 lg:p-10">
+      <p className="font-stitch-label text-[11px] font-bold uppercase tracking-[0.3em] text-[var(--stitch-shell-primary-strong)]">
         {eyebrow}
       </p>
-      <h2 className="font-stitch-headline mt-3 text-3xl font-black tracking-[-0.04em] text-stone-900">
+      <h2 className="font-stitch-headline mt-4 text-3xl font-extrabold tracking-[-0.05em] text-stone-900 md:text-4xl">
         {title}
       </h2>
-      <p className="mt-4 max-w-2xl text-sm leading-7 text-stone-600 md:text-base">
+      <p className="font-stitch-body mt-5 max-w-2xl text-sm leading-8 text-[var(--stitch-on-secondary-container)] md:text-base">
         {description}
       </p>
       {actions ? <div className="mt-6 flex flex-wrap gap-3">{actions}</div> : null}
