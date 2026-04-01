@@ -140,6 +140,14 @@ test("app shell uses top sticky navigation with a fixed right summary rail", () 
     resolve(import.meta.dirname, "../components/app-shell.tsx"),
     "utf-8",
   );
+  const shellHeaderSource = readFileSync(
+    resolve(import.meta.dirname, "../components/stitch-v2/shell-header.tsx"),
+    "utf-8",
+  );
+  const shellSidebarSource = readFileSync(
+    resolve(import.meta.dirname, "../components/stitch-v2/shell-sidebar.tsx"),
+    "utf-8",
+  );
 
   assert.equal(appShellSource.includes("ShellHeader"), true);
   assert.equal(appShellSource.includes("ShellSidebar"), true);
@@ -147,8 +155,10 @@ test("app shell uses top sticky navigation with a fixed right summary rail", () 
   assert.equal(appShellSource.includes("SurfaceCard"), true);
   assert.equal(appShellSource.includes("xl:grid-cols-[240px_minmax(0,1fr)_320px]"), true);
   assert.equal(appShellSource.includes("sticky top-24"), true);
-  assert.equal(appShellSource.includes("打开阶段导航"), false);
-  assert.equal(appShellSource.includes("打开摘要面板"), false);
+  assert.equal(shellHeaderSource.includes("即将到来"), true);
+  assert.equal(shellSidebarSource.includes("即将到来"), true);
+  assert.equal(shellHeaderSource.includes("Curriculum"), false);
+  assert.equal(shellSidebarSource.includes("新增章节"), true);
 });
 
 test("input workbench uses a dedicated file picker button and hidden input", () => {

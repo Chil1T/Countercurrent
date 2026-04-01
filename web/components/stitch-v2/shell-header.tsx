@@ -31,13 +31,19 @@ export function ShellHeader({
 
           <nav className="hidden items-center gap-8 md:flex">
             <span className="border-b-2 border-[var(--stitch-shell-primary)] pb-1 font-stitch-body text-sm font-bold text-[var(--stitch-shell-primary)]">
-              Curriculum
+              Workflow
             </span>
-            <span className="font-stitch-body text-sm font-medium text-[var(--stitch-on-secondary-container)]">
-              Assets
+            <span className="inline-flex items-center gap-2 font-stitch-body text-sm font-medium text-[var(--stitch-on-secondary-container)]">
+              Results
+              <span className="rounded-full bg-[var(--stitch-surface-container)] px-2 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--stitch-on-secondary-container)]">
+                即将到来
+              </span>
             </span>
-            <span className="font-stitch-body text-sm font-medium text-[var(--stitch-on-secondary-container)]">
+            <span className="inline-flex items-center gap-2 font-stitch-body text-sm font-medium text-[var(--stitch-on-secondary-container)]">
               Settings
+              <span className="rounded-full bg-[var(--stitch-surface-container)] px-2 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--stitch-on-secondary-container)]">
+                即将到来
+              </span>
             </span>
           </nav>
         </div>
@@ -53,8 +59,12 @@ export function ShellHeader({
               <MaterialSymbol name="account_circle" />
             </button>
           </div>
-          <ShellAction tone="primary" icon={<MaterialSymbol name="publish" className="text-base" />}>
-            Publish
+          <ShellAction
+            tone="primary"
+            disabled
+            icon={<MaterialSymbol name="publish" className="text-base" />}
+          >
+            成果发布 即将到来
           </ShellAction>
         </div>
       </div>

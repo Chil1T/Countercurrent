@@ -67,14 +67,19 @@ export function ShellSidebar({
       <div className="mt-auto border-t border-[color:var(--stitch-outline-variant)]/30 pt-4">
         <ShellAction
           tone="inverse"
+          disabled
           className="mb-4 w-full"
           icon={<MaterialSymbol name="add" className="text-sm" />}
         >
-          New Chapter
+          新增章节 即将到来
         </ShellAction>
         <div className="space-y-1">
-          <ShellAction icon={<MaterialSymbol name="help_outline" className="text-sm" />}>Help</ShellAction>
-          <ShellAction icon={<MaterialSymbol name="archive" className="text-sm" />}>Archive</ShellAction>
+          <ShellAction disabled icon={<MaterialSymbol name="help_outline" className="text-sm" />}>
+            帮助 即将到来
+          </ShellAction>
+          <ShellAction disabled icon={<MaterialSymbol name="archive" className="text-sm" />}>
+            归档 即将到来
+          </ShellAction>
         </div>
       </div>
     </aside>
