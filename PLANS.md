@@ -1,5 +1,35 @@
 # Plans
 
+## 2026-04-01 Stitch V2 Frontend Migration
+
+- Status: in_progress
+- Goal: 以 Stitch 五页设计稿为目标界面，高保真迁移默认 GUI 页面骨架，同时完整保留当前输入、配置、运行、结果、空态与 preview 的真实功能和语义。
+
+### Scope
+
+- 建立 Stitch V2 共享设计系统与页面骨架
+- 迁移 Overview、Input、Config、Run、Results 五页
+- 保持产品空态与内部 preview 调试态边界
+- 默认产品路由切到 V2
+- 文档、批次索引与最终验证收口
+
+### Execution Batches
+
+1. 待执行：共享设计系统与壳层基础
+2. 待执行：Overview 与产品空态
+3. 待执行：Input V2
+4. 待执行：Config V2
+5. 待执行：Run V2
+6. 待执行：Results V2
+7. 待执行：默认路由切换与迁移债务清理
+8. 待执行：文档、索引与最终验证
+
+### Validation
+
+- `node --experimental-strip-types --test web/tests/app-shell-branding.test.ts web/tests/app-shell-state.test.ts web/tests/overview-workbench.test.ts web/tests/input-workbench-ui.test.ts web/tests/config-workbench-view.test.ts web/tests/config-workbench-ui.test.ts web/tests/context-panel.test.ts web/tests/preview-mode.test.ts web/tests/results-layout.test.ts web/tests/results-workbench-state.test.ts web/tests/results-refresh.test.ts web/tests/results-view.test.ts web/tests/results-tree-chapter-status.test.ts web/tests/results-interaction.test.ts web/tests/run-workbench-layout.test.ts web/tests/run-workbench-chapter-progress.test.ts`
+- `npm run lint`
+- `npm run build`
+
 ## 2026-03-30 GUI Concurrency / Results UX
 
 - Status: completed
