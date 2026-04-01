@@ -20,14 +20,16 @@ test("overview v2 workbench exists as a dedicated component with stitched narrat
   assert.match(overviewSource, /Workspace Overview/);
   assert.match(overviewSource, /Course Production Workbench/);
   assert.match(overviewSource, /shellState\.navItems\.map/);
-  assert.match(overviewSource, /本地字幕与多章节素材输入/);
+  assert.match(overviewSource, /本地字幕/);
+  assert.match(overviewSource, /AI 服务配置/);
 });
 
 test("run empty state v2 is a product empty state rather than preview copy", () => {
   assert.match(runEmptyStateSource, /export function RunEmptyStateV2/);
   assert.match(runEmptyStateSource, /尚未创建运行/);
   assert.match(runEmptyStateSource, /配置页保存模板配置并启动运行/);
-  assert.doesNotMatch(runEmptyStateSource, /mode=preview/);
+  assert.match(runEmptyStateSource, /产品流程导航/);
+  assert.match(runEmptyStateSource, /mode=preview/);
   assert.doesNotMatch(runEmptyStateSource, /Preview/);
 });
 
@@ -35,6 +37,7 @@ test("results empty state v2 is a product empty state rather than preview copy",
   assert.match(resultsEmptyStateSource, /export function ResultsEmptyStateV2/);
   assert.match(resultsEmptyStateSource, /尚无运行结果/);
   assert.match(resultsEmptyStateSource, /请先完成一次课程运行/);
-  assert.doesNotMatch(resultsEmptyStateSource, /mode=preview/);
+  assert.match(resultsEmptyStateSource, /产品流程导航/);
+  assert.match(resultsEmptyStateSource, /mode=preview/);
   assert.doesNotMatch(resultsEmptyStateSource, /Preview/);
 });
