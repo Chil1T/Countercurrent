@@ -3,6 +3,16 @@
 :root {
   --background: #ece7dc;
   --foreground: #231c14;
+  --stitch-shell-backdrop: #fcf9ef;
+  --stitch-shell-panel: rgba(255, 255, 255, 0.94);
+  --stitch-shell-panel-soft: #f4efe5;
+  --stitch-shell-rail: #1f1b16;
+  --stitch-shell-border: rgba(114, 118, 135, 0.18);
+  --stitch-shell-border-strong: rgba(29, 109, 255, 0.18);
+  --stitch-shell-shadow: 0 26px 70px rgba(36, 28, 18, 0.12);
+  --stitch-shell-primary: #1d6dff;
+  --stitch-shell-primary-strong: #0d4fcc;
+  --stitch-shell-primary-soft: rgba(29, 109, 255, 0.1);
 }
 
 @theme inline {
@@ -20,7 +30,9 @@
 
   body {
     min-width: 320px;
-    background: var(--background);
+    background:
+      radial-gradient(circle at top left, rgba(29, 109, 255, 0.1), transparent 24%),
+      linear-gradient(180deg, #fcf9ef 0%, #f4efe5 100%);
     color: var(--foreground);
     font-family: var(--font-geist-sans), sans-serif;
     overflow-x: hidden;
@@ -33,5 +45,16 @@
   a {
     color: inherit;
     text-decoration: none;
+  }
+}
+
+@layer utilities {
+  .font-stitch-headline {
+    font-family: var(--font-geist-sans), sans-serif;
+    letter-spacing: -0.04em;
+  }
+
+  .font-stitch-label {
+    font-family: var(--font-geist-mono), monospace;
   }
 }
