@@ -131,6 +131,7 @@ class ProviderPermitRegistry:
         owner_payload = build_coordination_owner_payload({"provider": policy.provider, "kind": "provider-slot"})
 
         while True:
+            should_wait = False
             with wait_for_owned_directory(
                 allocation_lock_dir,
                 owner_payload=allocation_lock_payload,
@@ -139,16 +140,19 @@ class ProviderPermitRegistry:
             ):
                 configured_limit = self._ensure_provider_limit(provider_dir, policy)
                 if configured_limit is None:
-                    continue
-                for slot_index in range(configured_limit):
-                    slot_dir = provider_dir / f"slot-{slot_index:02d}"
-                    if try_acquire_owned_directory(
-                        slot_dir,
-                        owner_payload=owner_payload,
-                        stale_owner_grace_seconds=self.stale_owner_grace_seconds,
-                    ):
-                        return slot_dir
-            time.sleep(self.poll_interval_seconds)
+                    should_wait = True
+                else:
+                    for slot_index in range(configured_limit):
+                        slot_dir = provider_dir / f"slot-{slot_index:02d}"
+                        if try_acquire_owned_directory(
+                            slot_dir,
+                            owner_payload=owner_payload,
+                            stale_owner_grace_seconds=self.stale_owner_grace_seconds,
+                        ):
+                            return slot_dir
+                    should_wait = True
+            if should_wait:
+                time.sleep(self.poll_interval_seconds)
 
     def _release_slot(self, slot_dir: Path) -> None:
         release_owned_directory(slot_dir)

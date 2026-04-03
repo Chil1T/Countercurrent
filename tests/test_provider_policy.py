@@ -342,6 +342,65 @@ class ProviderPolicyTests(unittest.TestCase):
                 1,
             )
 
+    def test_provider_limit_change_does_not_busy_spin_while_waiting_for_drain(self) -> None:
+        module = self._load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root_dir = Path(tmp)
+            registry = module.ProviderPermitRegistry(root_dir=root_dir, poll_interval_seconds=0.01)
+            policy = module.ProviderExecutionPolicy(
+                provider="stub",
+                max_concurrent_per_run=1,
+                max_concurrent_global=1,
+                transient_http_statuses=(),
+                max_call_attempts=1,
+                max_resume_attempts=1,
+            )
+            provider_dir = root_dir / "stub"
+            provider_dir.mkdir(parents=True, exist_ok=True)
+            (provider_dir / "limit.json").write_text(
+                json.dumps({"max_concurrent_global": 2}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            sleep_calls: list[float] = []
+            wait_entries = 0
+            original_sleep = module.time.sleep
+            original_wait = module.wait_for_owned_directory
+            original_try_acquire = module.try_acquire_owned_directory
+            original_active_permits = module.ProviderPermitRegistry.active_permits
+
+            def fake_sleep(seconds: float) -> None:
+                sleep_calls.append(seconds)
+                raise RuntimeError("stop-loop")
+
+            def fake_wait_for_owned_directory(*args, **kwargs):
+                from contextlib import contextmanager
+
+                @contextmanager
+                def _guard():
+                    nonlocal wait_entries
+                    wait_entries += 1
+                    if wait_entries > 1 and not sleep_calls:
+                        raise RuntimeError("busy-spin")
+                    yield
+
+                return _guard()
+
+            try:
+                module.time.sleep = fake_sleep
+                module.wait_for_owned_directory = fake_wait_for_owned_directory
+                module.ProviderPermitRegistry.active_permits = lambda self, provider: 1
+                module.try_acquire_owned_directory = lambda *args, **kwargs: False
+                with self.assertRaisesRegex(RuntimeError, "stop-loop"):
+                    registry._acquire_slot(policy)
+            finally:
+                module.time.sleep = original_sleep
+                module.wait_for_owned_directory = original_wait
+                module.try_acquire_owned_directory = original_try_acquire
+                module.ProviderPermitRegistry.active_permits = original_active_permits
+
+            self.assertEqual(sleep_calls, [0.01])
+
     def test_same_pid_with_different_process_start_time_is_treated_as_stale(self) -> None:
         module = self._load_module()
         owner_payload = {

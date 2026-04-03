@@ -492,8 +492,11 @@ class RunService:
                 return
             if record.auto_resume_attempt_count >= runtime_config.max_resume_attempts:
                 return
+            try:
+                self._resume_record(record, draft, runtime_config)
+            except DraftNotReadyError:
+                return
             record.auto_resume_attempt_count += 1
-            self._resume_record(record, draft, runtime_config)
             self._persist_record(record)
 
     def _resolve_status(self, record: _RunRecord, snapshot, runtime: RuntimeSnapshot | None) -> str:
