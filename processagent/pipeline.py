@@ -853,7 +853,7 @@ class PipelineRunner:
                     container = chapter_state.setdefault("steps", {})
                 existing = container.get(step_name, {})
                 container[step_name] = {**existing, **payload}
-                state["last_error"] = None
+                self.runtime_state_guard._clear_last_error_for_step(state, scope, step_name)
 
             self.runtime_state_guard._mutate(mutate)
 

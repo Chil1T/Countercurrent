@@ -25,5 +25,5 @@ jobs:
           python-version: "3.11"
 
       - name: Run unit tests
-        shell: pwsh
+        shell: cmd
         run: python -u -m unittest discover -s tests -v

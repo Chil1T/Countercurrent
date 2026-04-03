@@ -191,9 +191,17 @@ class RuntimeStateMutationGuard:
             else:
                 chapter_state = state.setdefault("chapters", {}).setdefault(scope, {"steps": {}})
                 chapter_state.setdefault("steps", {})[step_name] = payload
-            state["last_error"] = None
+            self._clear_last_error_for_step(state, scope, step_name)
 
         self._mutate(mutate)
+
+    @staticmethod
+    def _clear_last_error_for_step(state: dict[str, Any], scope: str, step_name: str) -> None:
+        last_error = state.get("last_error")
+        if not isinstance(last_error, dict):
+            return
+        if last_error.get("scope") == scope and last_error.get("step") == step_name:
+            state["last_error"] = None
 
     def _mutate(self, mutator: Callable[[dict[str, Any]], None]) -> None:
         with self._lock:

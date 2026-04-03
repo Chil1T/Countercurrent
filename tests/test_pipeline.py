@@ -1103,7 +1103,7 @@ class PipelineRunnerTest(unittest.TestCase):
                 ),
             )
 
-    def test_runtime_state_mutation_guard_preserves_other_chapter_state(self) -> None:
+    def test_runtime_state_mutation_guard_preserves_other_chapter_state_and_unrelated_last_error(self) -> None:
         from processagent.chapter_execution import RuntimeStateMutationGuard
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1152,7 +1152,115 @@ class PipelineRunnerTest(unittest.TestCase):
                 persisted_state["chapters"]["第一章·绪论"]["steps"]["pack_plan"]["pipeline_signature"],
                 PIPELINE_SIGNATURE,
             )
+            self.assertEqual(
+                persisted_state["last_error"],
+                {"scope": "第一章·绪论", "step": "gap_fill"},
+            )
+
+    def test_runtime_state_mutation_guard_clears_matching_last_error_on_successful_retry(self) -> None:
+        from processagent.chapter_execution import RuntimeStateMutationGuard
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime_state_path = root / "runtime_state.json"
+            runtime_state = {
+                "course_id": "course-1",
+                "blueprint_hash": "hash-1",
+                "provider": "stub",
+                "default_model": "",
+                "stage_models": {},
+                "pipeline_signature": PIPELINE_SIGNATURE,
+                "review_enabled": False,
+                "review_mode": "light",
+                "target_output": "interview_knowledge_base",
+                "run_identity": {
+                    "review_enabled": False,
+                    "review_mode": "light",
+                    "target_output": "interview_knowledge_base",
+                },
+                "chapters": {
+                    "第一章·绪论": {"steps": {"gap_fill": {"status": "failed"}}},
+                },
+                "global": {},
+                "last_error": {"scope": "第一章·绪论", "step": "gap_fill"},
+            }
+            runtime_state_path.write_text(json.dumps(runtime_state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            guard = RuntimeStateMutationGuard(
+                runtime_state_path=runtime_state_path,
+                runtime_state=runtime_state,
+                blueprint_hash="hash-1",
+                now_iso_factory=lambda: "2026-03-27T00:00:00+00:00",
+            )
+
+            guard.mark_step_complete("第一章·绪论", "gap_fill")
+
+            persisted_state = json.loads(runtime_state_path.read_text(encoding="utf-8"))
             self.assertIsNone(persisted_state["last_error"])
+
+    def test_pipeline_runner_mark_step_complete_preserves_unrelated_last_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "captions"
+            output_dir = root / "out"
+            blueprint = make_blueprint(
+                course_name="数据库系统概论",
+                chapters=[
+                    {
+                        "chapter_id": "第一章·绪论",
+                        "title": "绪论",
+                        "aliases": ["第一章·绪论"],
+                        "expected_topics": ["数据库发展阶段"],
+                    },
+                    {
+                        "chapter_id": "第二章·模型",
+                        "title": "模型",
+                        "aliases": ["第二章·模型"],
+                        "expected_topics": ["关系模型"],
+                    },
+                ],
+            )
+            input_dir.mkdir(parents=True, exist_ok=True)
+            for chapter in blueprint["chapters"]:
+                (input_dir / f"{chapter['chapter_id']}.md").write_text("transcript", encoding="utf-8")
+
+            runner = PipelineRunner(
+                config=PipelineConfig(input_dir=input_dir, output_dir=output_dir, course_blueprint=blueprint),
+                llm_backend=HeuristicLLMBackend(),
+            )
+            runner.runtime_state = {
+                "course_id": blueprint["course_id"],
+                "blueprint_hash": blueprint["blueprint_hash"],
+                "provider": "heuristic",
+                "default_model": "",
+                "stage_models": {},
+                "pipeline_signature": PIPELINE_SIGNATURE,
+                "review_enabled": False,
+                "review_mode": "light",
+                "target_output": "interview_knowledge_base",
+                "run_identity": {
+                    "review_enabled": False,
+                    "review_mode": "light",
+                    "target_output": "interview_knowledge_base",
+                },
+                "chapters": {
+                    "第一章·绪论": {"steps": {"pack_plan": {"status": "failed"}}},
+                    "第二章·模型": {"steps": {"gap_fill": make_step_record("hash-1")}},
+                },
+                "global": {},
+                "last_error": {"scope": "第一章·绪论", "step": "pack_plan", "last_error_kind": "http_status:429"},
+            }
+            runner.runtime_state_guard.runtime_state = runner.runtime_state
+            runner.runtime_state_path.parent.mkdir(parents=True, exist_ok=True)
+            runner.runtime_state_path.write_text(json.dumps(runner.runtime_state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            runner.runtime_state_guard.mark_step_complete("第二章·模型", "write_terms")
+
+            persisted_state = json.loads(runner.runtime_state_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                persisted_state["last_error"],
+                {"scope": "第一章·绪论", "step": "pack_plan", "last_error_kind": "http_status:429"},
+            )
 
     def test_run_with_build_global_keeps_chapter_execution_path_bypassed(self) -> None:
         class ExplodingPlanner:
