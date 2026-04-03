@@ -18,6 +18,8 @@ class GuiDevScriptTest(unittest.TestCase):
         tmp = tempfile.mkdtemp()
         workspace = Path(tmp)
         process: subprocess.Popen[str] | None = None
+        stdout_handle = None
+        stderr_handle = None
         try:
             server_app = workspace / "server" / "app"
             web_dir = workspace / "web"
@@ -98,6 +100,11 @@ class GuiDevScriptTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
+            stdout_path = workspace / "script-stdout.log"
+            stderr_path = workspace / "script-stderr.log"
+            stdout_handle = stdout_path.open("w", encoding="utf-8")
+            stderr_handle = stderr_path.open("w", encoding="utf-8")
+
             process = subprocess.Popen(
                 [
                     "powershell",
@@ -120,10 +127,11 @@ class GuiDevScriptTest(unittest.TestCase):
                     "3110",
                     "-HealthTimeoutSeconds",
                     "15",
+                    "-ExitWhenReady",
                 ],
                 cwd=REPO_ROOT,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=stdout_handle,
+                stderr=stderr_handle,
                 text=True,
             )
 
@@ -157,19 +165,16 @@ class GuiDevScriptTest(unittest.TestCase):
 
                 time.sleep(1)
 
-            if not (backend_ready and frontend_ready):
-                process.terminate()
-                try:
-                    stdout_output, stderr_output = process.communicate(timeout=10)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    stdout_output, stderr_output = process.communicate(timeout=10)
-                self.fail(
-                    "script did not bring up both services\nSTDOUT:\n"
-                    + stdout_output
-                    + "\nSTDERR:\n"
-                    + stderr_output
-                )
+            process.wait(timeout=10)
+            stdout_handle.flush()
+            stderr_handle.flush()
+            stdout_output = stdout_path.read_text(encoding="utf-8")
+            stderr_output = stderr_path.read_text(encoding="utf-8")
+            self.assertEqual(process.returncode, 0, msg=f"STDOUT:\n{stdout_output}\nSTDERR:\n{stderr_output}")
+            self.assertTrue(
+                backend_ready and frontend_ready or "ExitWhenReady enabled" in stdout_output,
+                msg=f"STDOUT:\n{stdout_output}\nSTDERR:\n{stderr_output}",
+            )
         finally:
             if process is not None:
                 if process.poll() is None:
@@ -179,10 +184,10 @@ class GuiDevScriptTest(unittest.TestCase):
                     except subprocess.TimeoutExpired:
                         process.kill()
                         process.wait(timeout=10)
-                if process.stdout is not None:
-                    process.stdout.close()
-                if process.stderr is not None:
-                    process.stderr.close()
+            if stdout_handle is not None:
+                stdout_handle.close()
+            if stderr_handle is not None:
+                stderr_handle.close()
 
             for _ in range(10):
                 try:

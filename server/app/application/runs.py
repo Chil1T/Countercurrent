@@ -484,11 +484,11 @@ class RunService:
         if draft is None:
             return
         with self._course_lock(record.session.course_id):
-            self._ensure_mutable(record.session.id)
-            self._ensure_course_idle(record.session.course_id, exclude_run_id=record.session.id)
             try:
+                self._ensure_mutable(record.session.id)
+                self._ensure_course_idle(record.session.course_id, exclude_run_id=record.session.id)
                 runtime_config = self._resolve_runtime_config(draft)
-            except RunConfigurationError:
+            except (RunConflictError, RunConfigurationError):
                 return
             if record.auto_resume_attempt_count >= runtime_config.max_resume_attempts:
                 return

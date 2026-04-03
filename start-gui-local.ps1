@@ -11,6 +11,7 @@ param(
     [switch]$NoCleanPorts,
     [switch]$SkipBackendInstall,
     [switch]$SkipFrontendInstall,
+    [switch]$ExitWhenReady,
     [switch]$DryRun
 )
 
@@ -444,6 +445,11 @@ try {
     Write-Host "Controller window is active. Close this window or press Ctrl+C to stop backend and frontend."
     Write-Host "Backend PID: $($backendProcess.Id)"
     Write-Host "Frontend PID: $($frontendProcess.Id)"
+
+    if ($ExitWhenReady) {
+        Write-Host "ExitWhenReady enabled. Verified both services and exiting controller."
+        exit 0
+    }
 
     while ($true) {
         foreach ($tracked in $script:TrackedProcesses) {
