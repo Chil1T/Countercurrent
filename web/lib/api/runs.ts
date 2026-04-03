@@ -3,10 +3,25 @@ export type StageStatus = {
   status: string;
 };
 
+export type ChapterProgress = {
+  chapter_id: string;
+  status: string;
+  current_step: string | null;
+  completed_step_count: number;
+  total_step_count: number;
+  export_ready: boolean;
+};
+export type CourseResultsContext = {
+  course_id: string;
+  latest_run: RunSession | null;
+};
+
+
 export type RunSession = {
   id: string;
   draft_id: string;
   course_id: string;
+  created_at: string | null;
   status: string;
   run_kind: "chapter" | "global";
   backend: string;
@@ -19,7 +34,14 @@ export type RunSession = {
   review_enabled: boolean;
   review_mode: string | null;
   stages: StageStatus[];
+  chapter_progress: ChapterProgress[];
+  snapshot_complete: boolean;
   last_error: string | null;
+};
+
+export type UnstartedRunWorkbenchState = {
+  draft_id: string | null;
+  course_id: string | null;
 };
 
 export type RunLogPreview = {
@@ -104,6 +126,19 @@ export async function cleanRun(runId: string): Promise<RunSession> {
   }
 
   return (await response.json()) as RunSession;
+}
+
+export async function getCourseResultsContext(courseId: string): Promise<CourseResultsContext> {
+  const response = await fetch(`${API_BASE_URL}/courses/${courseId}/results-context`, {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`Failed to load course results context: ${response.status} ${message}`);
+  }
+
+  return (await response.json()) as CourseResultsContext;
 }
 
 export async function getRunLog(runId: string): Promise<RunLogPreview> {

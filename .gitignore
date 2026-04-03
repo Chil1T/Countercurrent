@@ -2,6 +2,10 @@
 __pycache__/
 *.pyc
 .vs/
+.gemini/
+.processagent-runtime/
+.superpowers/
+context/
 out/
 captions/
 tmp-upload-fixtures/

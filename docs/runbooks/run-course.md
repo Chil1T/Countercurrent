@@ -26,6 +26,10 @@ python -m processagent.cli run-course `
   - `api_key`
   - `simple_model` / `complex_model`
   - `timeout_seconds`
+  - `max_concurrent_per_run`
+  - `max_concurrent_global`
+  - `max_call_attempts`
+  - `max_resume_attempts`
 - 恢复时不允许改变：
   - `target_output`
   - `review_mode`
@@ -37,10 +41,10 @@ python -m processagent.cli run-course `
 | Subcommand | Required | Optional | Notes |
 | --- | --- | --- | --- |
 | `build-blueprint` | `--book-title`, `--input-dir`, `--output-dir` | `--toc-file`, `--toc-text`, `--author`, `--edition`, `--publisher`, `--isbn`, `--backend`, stage/backend model args | 只生成 `course_blueprint.json` 和最小 `runtime_state.json` |
-| `run-course` | `--book-title`, `--input-dir`, `--output-dir` | `--toc-file`, `--toc-text`, `--author`, `--edition`, `--publisher`, `--isbn`, `--backend`, model/stage model args, `--clean`, `--review-mode`, `--target-output`, `--enable-review` | GUI 章节主流程走这个命令；默认不跑 `review` |
-| `resume-course` | `--book-title`, `--input-dir`, `--output-dir` | `--toc-file`, `--toc-text`, `--author`, `--edition`, `--publisher`, `--isbn`, `--backend`, `--base-url`, `--timeout-seconds`, model/stage model args, `--stub-scenario` | GUI 恢复章节运行走这个命令；只刷新 provider routing，不接受 policy override |
-| `build-global` | `--book-title`, `--output-dir` | `--backend`, model/stage model args | 手动重建 `global/*`；不读取章节输入目录 |
-| `clean-course` | `--book-title`, `--input-dir`, `--output-dir` | 无 | 不接受 `--backend` 或 stage model 参数 |
+| `run-course` | `--book-title`, `--input-dir`, `--output-dir` | `--toc-file`, `--toc-text`, `--author`, `--edition`, `--publisher`, `--isbn`, `--backend`, model/stage model args, `--clean`, `--review-mode`, `--target-output`, `--enable-review`, `--run-id`, provider policy args（`--max-concurrent-per-run` / `--max-concurrent-global` / `--max-call-attempts` / `--max-resume-attempts`） | GUI 章节主流程走这个命令；默认不跑 `review`；若提供 `--run-id`，会同步最终 `.md` 到该 run 的 snapshot 目录 |
+| `resume-course` | `--book-title`, `--input-dir`, `--output-dir` | `--toc-file`, `--toc-text`, `--author`, `--edition`, `--publisher`, `--isbn`, `--backend`, `--base-url`, `--timeout-seconds`, model/stage model args, `--stub-scenario`, `--run-id`, provider policy args（`--max-concurrent-per-run` / `--max-concurrent-global` / `--max-call-attempts` / `--max-resume-attempts`） | GUI 恢复章节运行走这个命令；刷新 provider routing 与 provider policy，但不接受 pipeline identity override；若提供 `--run-id`，会继续刷新该 run 的 snapshot |
+| `build-global` | `--book-title`, `--output-dir` | `--backend`, model/stage model args, provider policy args（`--max-concurrent-per-run` / `--max-concurrent-global` / `--max-call-attempts` / `--max-resume-attempts`） | 手动重建 `global/*`；不读取章节输入目录 |
+| `clean-course` | `--book-title`, `--input-dir`, `--output-dir` | `--run-id` | 不接受 `--backend` 或 stage model 参数；若提供 `--run-id`，会额外删除该 run 在 `results-snapshots/` 下的最终产物快照 |
 | `show-status` | `--book-title`, `--input-dir`, `--output-dir` | 无 | 读取 `runtime_state.json` |
 | `inspect-source` | `--book-title`, `--input-dir`, `--output-dir` | 无 | 当前主要用于输入盘点 |
 
@@ -66,6 +70,56 @@ GUI 侧在进入 CLI 前还会先做一层解析：
 
 非法值（例如 `<= 0`）会在 GUI/API 层直接拒绝创建 run。
 
+## Provider Policy And Recovery
+
+当前 provider policy 合同包括：
+
+- `max_concurrent_per_run`：单 run 章节并发上限
+- `max_concurrent_global`：全服务 provider permit 上限
+- `max_call_attempts`：单次 hosted LLM 调用最大重试次数
+- `max_resume_attempts`：run 级自动 `resume-course` 最大次数
+
+内置默认值当前覆盖：
+
+- `openai`
+- `openai_compatible`
+- `anthropic`
+- `heuristic`
+- `stub`
+
+解析顺序当前是：
+
+1. provider 内置默认值
+2. config 层 `provider_policies.<provider>` 覆盖
+3. `run-course` / `resume-course` / `build-global` 显式 flags 覆盖
+
+说明：
+
+- GUI 当前只接入第 1/2 层，不提供课程级 provider policy override
+- 非法值（例如布尔值、字符串整数、`<= 0`）应在配置解析或参数校验阶段直接拒绝
+
+恢复策略当前分两层：
+
+- 调用级：对 transient HTTP 状态码 `408`、`425`、`429`、`500`、`502`、`503`、`504` 与网络异常做有限重试
+- run 级：GUI / `RunService` 在读取失败的章节 run 时，可在 `max_resume_attempts` 预算内自动触发 `resume-course`
+
+追责落点当前包括：
+
+- `runtime_state.json`
+  - `attempt_count`：该 step 实际发起的调用次数
+  - `last_error_kind`：最近一次失败尝试的错误类型；即使最终尝试成功，也可能保留最后一次 transient error
+  - `retry_history`：按尝试顺序记录每次 error/completed，以及该次失败后是否继续重试
+- `out/courses/<course_id>/runtime/llm_calls.jsonl`
+
+自动 `resume-course` 的边界当前是：
+
+- 只针对 `run_kind = chapter` 的失败 run
+- 只针对 `runtime_state.last_error_kind` 仍被识别为 transient 的失败
+- 要求当前 provider 配置仍可解析，且 `auto_resume_attempt_count < max_resume_attempts`
+- 不覆盖 `clean-course`
+- 不覆盖 permanent failure
+- 不覆盖服务重启后 provider 配置缺失导致的失败
+
 ## Adapter Rules
 
 当 Web/FastAPI adapter 包装 `processagent.cli` 时，必须遵守：
@@ -80,20 +134,22 @@ GUI 侧在进入 CLI 前还会先做一层解析：
 - `build-global` 不会改写已冻结的 `runtime_state.run_identity`；它只重建 `global/*`，不会把原先章节 run 的 `review_enabled / review_mode / target_output` 改成当前临时配置
 - `build-global` 汇总章节时，优先以当前 `runtime_state.json` 里的章节 scope 作为输入集合；只有其关键 writer step 仍匹配当前 `blueprint_hash` 的 scope 才会被视为活跃章节，旧 run 遗留 scope 或目录不会再混入全局术语表或面试索引
 - 对同一个 `course_id`，当前 orchestration 只允许一个活跃 run；无论章节主流程还是 `build-global`，如果已有 `running` run 占用同一课程输出目录，就应先拒绝新 run，避免并发写坏 `runtime_state.json` 和 checkpoint
-- GUI 当前只把两类配置接入 runtime：
+- GUI 当前会把以下配置接入 runtime：
   - `provider/backend`
   - `base_url`
   - `simple_model` / `complex_model`
   - `timeout_seconds`
+  - provider 级 `provider_policies.*`
   - `template` 通过 `--target-output` 写入 blueprint `policy.target_output`
   - `review_mode` 通过 `--review-mode` 写入 blueprint `policy.review_mode`
 - `content_density` 和 ZIP 导出偏好还不属于 `processagent.cli` 的运行时参数契约
 - hosted API key 只允许通过单次子进程环境变量注入，不要通过修改服务进程全局环境来传播 provider 密钥
-- `resume-course` 应继续同一个 run 已冻结的流水线身份；恢复时可以刷新 provider/base URL/model/timeout，但不能借恢复路径改模板或 Review 策略
+- `resume-course` 应继续同一个 run 已冻结的流水线身份；恢复时可以刷新 provider/base URL/model/timeout 与 provider policy，但不能借恢复路径改模板或 Review 策略
 - 当 GUI 草稿还没有保存课程模板配置时，运行时默认按 `interview_knowledge_base` 解释 active writers 与阶段轨道，保持和 pipeline blueprint 默认值一致
 - checkpoint 是否有效不能只看文件存在；当前实现还会校验 step 记录里的 pipeline signature，避免 pipeline 行为变了但旧产物被误当成可复用
 - 当前 GUI/provider 配置问题，优先按 `docs/runbooks/gui-dev.md` 的 GUI 语义解释，再回到这里核对 CLI/runtime contract
 - 对 GUI draft 输入，字幕文件名在规范化后必须唯一；如果两个上传项最终会写到同一个 `input/<filename>.md`，adapter 应拒绝而不是静默覆盖
+- chapter/export 状态必须以 runtime step 完成态为准，不要用 `notebooklm/*` 或中间文件是否存在来推断 completed chapter
 
 ## Current Stage Contract
 
@@ -124,6 +180,9 @@ GUI 侧在进入 CLI 前还会先做一层解析：
   - 冻结的 `run_identity.review_enabled`
   - 冻结的 `run_identity.review_mode`
   - 冻结的 `run_identity.target_output`
+  - step 级 `attempt_count`
+  - step 级 `last_error_kind`
+  - step 级 `retry_history`
 - 当前仍以 `policy.target_output` 作为 runtime 的模板 source of truth：
   - `standard_knowledge_pack`
   - `lecture_deep_dive`
@@ -208,7 +267,7 @@ out/courses/<course_id>/runtime/llm_calls.jsonl
 
 当前单次 run 内部的执行策略是：
 
-- transcript 章节循环：串行
+- transcript 章节循环：按 provider policy 限定的多章节并发
 - 单章内 JSON stage：串行
 - 单章内 writer stage：串行
 - `build-global`：串行
@@ -225,9 +284,62 @@ out/courses/<course_id>/runtime/llm_calls.jsonl
 
 当前结论：
 
-- 还不需要引入 stage 级并发上限参数
-- 先文档化当前串行执行 contract，并通过 `llm_calls.jsonl` 做调用追责
-- 如果后续真的引入多 run 调度或 fan-out，再在 orchestration 边界增加上限控制
+- 章节级并发只发生在多章之间，不发生在单章内部
+- 单 run 并发与全服务 provider 并发都必须受 provider policy registry 控制
+- `llm_calls.jsonl` 与 `runtime_state.json` 共同承担调用追责与重试审计
+- 如果后续真的引入 stage 级 fan-out，再在当前 registry 之上扩展，而不是绕开现有 coordination root
+
+## Run API Contract
+
+`GET /runs/{id}` 对章节 run 当前同时暴露两层合同：
+
+- `stages[]`：向后兼容的聚合阶段轨道
+- `chapter_progress[]`：章节粒度进度，用于并发运行态与结果页
+
+`chapter_progress[]` 的每个元素当前包含：
+
+- `chapter_id`
+- `status`：`pending` / `running` / `completed` / `failed`
+- `current_step`：当前 running 或 failed 的 step；章节已 completed 时为 `null`
+- `completed_step_count`
+- `total_step_count`
+- `export_ready`
+
+其中 `export_ready` 的严格口径是：
+
+- 仅当当前 `target_output` + `review_enabled` 所要求的全部章节 step 都已 `completed` 时为 `true`
+- 章节目录里存在 `notebooklm/*` 或部分中间文件，不足以把该章视为 completed
+- `GET /runs/{id}` 如果触发了自动 `resume-course`，返回值可能直接从 `failed` 翻回 `running`
+
+## Artifacts Export Contract
+
+`GET /courses/{course_id}/export` 当前支持以下过滤参数：
+
+- `completed_chapters_only=true`
+- `final_outputs_only=true`
+
+语义是：
+
+- `completed_chapters_only=true`：仅保留 `export_ready` 章节的章节作用域文件；课程根文件和非章节文件继续保留
+- `final_outputs_only=true`：仅保留 `chapters/<chapter_id>/notebooklm/*`
+- 两者同时为 `true`：只保留“严格 completed chapter”的 `notebooklm/*`
+
+## Results Snapshot Contract
+
+GUI 当前新增只读快照层，用于支撑默认结果工作台的最终产物树：
+
+```text
+out/_gui/results-snapshots/<course_id>/<run_id>/chapters/<chapter_id>/notebooklm/*.md
+```
+
+说明：
+
+- snapshot 只保存最终目标 `.md`
+- snapshot 不包含 `intermediate/*.json`、`runtime/*`、`review_report.json`
+- `run-course` / `resume-course` 只有在提供 `--run-id` 时才会同步该层
+- `build-global` 不写入 snapshot 主树；`global/*` 仍留在兼容 artifacts/export 路径
+- `clean-course --run-id <id>` 会删除该 run 在 `results-snapshots/` 下的快照目录
+- 结果页当前主树以 snapshot 为事实源；旧 `artifacts/*` 仍用于兼容导出和其他非主树读取路径
 
 ## Status
 

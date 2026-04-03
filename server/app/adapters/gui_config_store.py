@@ -22,7 +22,7 @@ class GuiConfigStore:
     def save(self, config: GuiRuntimeConfig) -> GuiRuntimeConfig:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._path.write_text(
-            json.dumps(config.model_dump(), ensure_ascii=False, indent=2),
+            json.dumps(config.model_dump(exclude_none=True), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         return config

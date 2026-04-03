@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from threading import local
 from typing import Any, Protocol
 
 
@@ -28,6 +30,20 @@ class LLMBackend(Protocol):
         model_override: str | None = None,
     ) -> str:
         ...
+
+
+class LLMHTTPError(RuntimeError):
+    def __init__(self, *, status_code: int, detail: str) -> None:
+        self.status_code = status_code
+        self.detail = detail
+        super().__init__(f"LLM request failed: {status_code} {detail}")
+
+
+class LLMNetworkError(RuntimeError):
+    def __init__(self, *, kind: str, message: str) -> None:
+        self.kind = kind
+        self.message = message
+        super().__init__(message)
 
 
 def parse_json_text(text: str) -> dict[str, Any]:
@@ -60,7 +76,7 @@ def parse_json_text(text: str) -> dict[str, Any]:
 @dataclass
 class HttpJsonBackend:
     timeout_seconds: int = 120
-    _last_call_metadata: dict[str, Any] | None = field(default=None, init=False, repr=False)
+    _call_metadata: Any = field(default_factory=local, init=False, repr=False)
 
     def _post_json(self, url: str, body: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
         request = urllib.request.Request(
@@ -74,11 +90,21 @@ class HttpJsonBackend:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"LLM request failed: {error.code} {detail}") from error
+            raise LLMHTTPError(status_code=error.code, detail=detail) from error
+        except urllib.error.URLError as error:
+            raise _coerce_network_error(error.reason if error.reason is not None else error) from error
+        except TimeoutError as error:
+            raise LLMNetworkError(kind="timeout", message=str(error)) from error
+        except ConnectionResetError as error:
+            raise LLMNetworkError(kind="connection_reset", message=str(error)) from error
+        except OSError as error:
+            if _is_transient_network_os_error(error):
+                raise _coerce_network_error(error) from error
+            raise
 
     def consume_last_call_metadata(self) -> dict[str, Any] | None:
-        metadata = self._last_call_metadata
-        self._last_call_metadata = None
+        metadata = getattr(self._call_metadata, "value", None)
+        self._call_metadata.value = None
         return metadata
 
     def _usage_from_response(self, response_json: dict[str, Any]) -> tuple[int | None, int | None]:
@@ -104,7 +130,7 @@ class HttpJsonBackend:
         input_tokens, output_tokens = (None, None)
         if response_json is not None:
             input_tokens, output_tokens = self._usage_from_response(response_json)
-        self._last_call_metadata = {
+        self._call_metadata.value = {
             "provider": provider,
             "model": model,
             "input_tokens": input_tokens,
@@ -258,6 +284,38 @@ class OpenAIResponsesBackend(HttpJsonBackend):
         if texts:
             return "\n".join(texts)
         raise RuntimeError("OpenAI response did not include text output.")
+
+
+def _coerce_network_error(error: BaseException) -> LLMNetworkError:
+    if isinstance(error, TimeoutError):
+        return LLMNetworkError(kind="timeout", message=str(error))
+    if isinstance(error, ConnectionResetError):
+        return LLMNetworkError(kind="connection_reset", message=str(error))
+    if isinstance(error, socket.timeout):
+        return LLMNetworkError(kind="timeout", message=str(error))
+    if isinstance(error, OSError):
+        kind = _network_os_error_kind(error)
+        if kind is not None:
+            return LLMNetworkError(kind=kind, message=str(error))
+    return LLMNetworkError(kind="urlopen", message=str(error))
+
+
+def _is_transient_network_os_error(error: OSError) -> bool:
+    if isinstance(error, socket.timeout):
+        return True
+    if isinstance(error, ConnectionResetError):
+        return True
+    return _network_os_error_kind(error) is not None
+
+
+def _network_os_error_kind(error: OSError) -> str | None:
+    if getattr(error, "errno", None) == 104 or getattr(error, "winerror", None) == 10054:
+        return "connection_reset"
+    if getattr(error, "errno", None) == 110 or getattr(error, "winerror", None) == 10060:
+        return "timeout"
+    if getattr(error, "errno", None) == 111 or getattr(error, "winerror", None) == 10061:
+        return "connection_error"
+    return None
 
 
 @dataclass

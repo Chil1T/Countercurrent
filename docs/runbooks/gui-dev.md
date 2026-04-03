@@ -2,7 +2,7 @@
 
 ## Scope
 
-本 runbook 说明 `databaseleaning` GUI v1 的本地开发与最小验证方式。
+本 runbook 说明 `databaseleaning` GUI 当前默认产品页的本地开发与最小验证方式。当前默认界面已经切到基于 Stitch V4 参考样例的新展示层，但 runtime/API contract 保持不变。
 
 ## Components
 
@@ -51,6 +51,8 @@ GUI 运行页当前采用下面这组产品状态：
 - 阶段轨道以下面的运行时合同为准：`course_blueprint.json`、`runtime_state.json`
 - `resume` 会继续当前 run 已冻结的流水线身份：`target_output`、`review_enabled`、`review_mode` 与 stage graph
 - `resume` 会重新读取当前 provider routing：`provider`、`base_url`、`api_key`、`simple_model`、`complex_model`、`timeout_seconds`
+- `resume` 也会重新读取当前 provider policy：`max_concurrent_per_run`、`max_concurrent_global`、`max_call_attempts`、`max_resume_attempts`
+- 若章节 run 因 transient error 失败，`GET /runs/{id}` 可能在预算内自动触发一次后台 `resume-course`；`clean-course` 与 permanent failure 不走这条路径
 - 如果要改模板或 Review 策略，请创建新的 run，而不是复用旧 run
 
 ## GUI Runtime Config
@@ -90,9 +92,19 @@ GUI 当前对 runtime config 的解析顺序是：
 - `simple_model`
 - `complex_model`
 - `timeout_seconds`
+- `max_concurrent_per_run`
+- `max_concurrent_global`
+- `max_call_attempts`
+- `max_resume_attempts`
 - `review_mode`
 - `review_enabled`
 - `template -> target_output`
+
+provider policy 当前的默认与覆盖边界是：
+
+- 内置默认值覆盖 `openai`、`openai_compatible`、`anthropic`、`heuristic`、`stub`
+- GUI 当前只支持 provider 级默认覆盖：`gui-config.json` 的 `provider_policies.<provider>`
+- GUI 当前还不支持课程级 provider policy 覆盖；单次 run 的 provider policy override 仍属于 CLI/runtime 能力
 
 当前仍未接入 `run-course` runtime contract 的配置包括：
 
@@ -158,11 +170,12 @@ GUI 当前采用两层模型路由：
 - GUI 的“更新全局汇总”会单独创建一个 `run_kind = global`
 - `review` 默认关闭；可以由课程默认值打开，也可以在单次 run 时覆盖
 - `quarantine` 已移除；review 只产出提示报告，不再隔离章节
-- 单次章节 run 当前是串行执行：
-  - transcript 章节循环串行
+- 单次章节 run 当前支持“多章节并发 + 双层限流”：
+  - transcript 章节循环按 `max_concurrent_per_run` 限制并发
+  - provider permit 按 `max_concurrent_global` 做全服务共享限流
   - 单章 stage 串行
   - active writers 串行
-- provider 压力主要来自 hosted writer/review/global 阶段，以及多 run 并发，不来自单次 run 内部 fan-out
+- provider 压力当前由 hosted stage 成本、章节并发额度和多 run 并发共同决定
 - 同一个 `course_id` 当前只允许一个活跃 run；当某门课已有 `running` 的章节 run 或 global run 时，GUI/API 会拒绝为该课程再启动新的 run，避免并发写坏同一份 `out/courses/<course_id>` runtime。
 
 ## Writer Profile
@@ -208,10 +221,13 @@ out/courses/<course_id>/runtime/llm_calls.jsonl
 默认行为：
 
 - 清理 `3000/8000` 监听端口
-- 后端使用 `python -m uvicorn server.app.main:app --host 127.0.0.1 --port 8000`
+- 后端会先解析 `PythonCommand` 的实际绝对路径并校验版本 `>= 3.10`，再使用该解释器启动 `uvicorn`
 - 前端使用 `npx next dev --hostname 127.0.0.1 --port 3000`
 - 日志写入 `out/_gui/backend-dev.log` 与 `out/_gui/frontend-dev.log`
 - 轮询 `healthz` 与 `/courses/new/input`，只有两者都返回 `200` 才算启动成功
+- 当前 `PowerShell` 窗口会保留为 controller window
+- 后端与前端子进程窗口默认隐藏，不再额外弹出两个空白 `cmd.exe`
+- 关闭 controller window 或按 `Ctrl+C` 时，会自动停止这两个子进程
 
 常用可选参数：
 
@@ -228,9 +244,12 @@ out/courses/<course_id>/runtime/llm_calls.jsonl
 说明：
 
 - 默认 `WorkspaceRoot` 为脚本所在仓库根目录
+- 默认 `PythonCommand` 是裸 `python`；脚本当前会打印 `Resolved Python command` 和 `Resolved Python version`，便于确认实际使用的是哪一个解释器
+- 如果本机同时装了 `mise`、Anaconda、系统 Python 或其他发行版，请优先检查这里打印出来的解释器，而不是只看当前终端里的 `python --version`
 - `SkipBackendInstall` / `SkipFrontendInstall` 适合依赖已安装的重复启动
 - `NoCleanPorts` 适合你明确知道现有 `3000/8000` 服务应保留时使用
 - `DryRun` 只打印将执行的命令、日志路径和探活地址，不真正启动进程
+- 非 `DryRun` 模式下，脚本不会自动退出；controller window 会持续存活，用于托管和回收子进程
 
 ### Frontend
 
@@ -293,25 +312,46 @@ npx next dev --hostname 127.0.0.1 --port 3000
 
 ### Background Start
 
-需要后台常驻时，不要依赖 `cmd /k`。更稳的是输出到日志文件：
+当前一键脚本已经把“后台子进程 + 日志落盘 + 控制窗口回收”整合好了。若你直接用：
+
+```powershell
+.\start-gui-local.ps1
+```
+
+推荐把当前 `PowerShell` 窗口视为 controller window：
+
+- 可以看到启动成功/失败、探活状态和子进程异常退出信息
+- 不会再额外弹出两个空白子窗口
+- 关闭这个窗口时，前后端会一起停止
+
+只有在你明确不想使用一键脚本时，再手动做后台常驻。手动方式仍然建议输出到日志文件：
 
 后端：
 
 ```powershell
-Start-Process cmd.exe -ArgumentList '/c','python -m uvicorn server.app.main:app --host 127.0.0.1 --port 8000 > out\_gui\backend-dev.log 2>&1' -WorkingDirectory (Get-Location)
+Start-Process powershell -ArgumentList @(
+  '-NoProfile',
+  '-Command',
+  "& 'python' -m uvicorn server.app.main:app --host 127.0.0.1 --port 8000 *> 'out\\_gui\\backend-dev.log'"
+) -WorkingDirectory (Get-Location)
 ```
 
 前端：
 
 ```powershell
-Start-Process cmd.exe -ArgumentList '/c','npx next dev --hostname 127.0.0.1 --port 3000 > ..\out\_gui\frontend-dev.log 2>&1' -WorkingDirectory (Join-Path (Get-Location) 'web')
+Start-Process powershell -ArgumentList @(
+  '-NoProfile',
+  '-Command',
+  "& 'npx' next dev --hostname 127.0.0.1 --port 3000 *> '..\\out\\_gui\\frontend-dev.log'"
+) -WorkingDirectory (Join-Path (Get-Location) 'web')
 ```
 
 说明：
 
-- `cmd /k` 适合人工盯日志，但关窗口就会停服务
-- `cmd /c ... > log 2>&1` 更适合后台常驻
+- `powershell -Command "& '<exe>' ... *> '<log>'"` 比 `cmd /c` 更稳，尤其当解释器路径自身带引号或空格时
+- 单独前台盯日志仍然优先用 `Standard Start`，不要把“后台常驻”当成默认路径
 - 不要把 `Start-Process` 的 `RedirectStandardOutput` 和 `RedirectStandardError` 指到同一个文件；PowerShell 会直接报错
+- 一键脚本当前不再依赖弹出式 `cmd.exe` 窗口托管服务，而是由 controller window 统一回收子进程
 
 ### Standard Health Checks
 
@@ -356,6 +396,7 @@ out/_gui/frontend-dev.log
 - 依赖缺失
 - dev server 没真正监听
 - 启动命令被窗口关闭打断
+- controller window 报出的子进程异常退出
 
 ## Browser QA
 
@@ -369,6 +410,27 @@ out/_gui/frontend-dev.log
   - 启动运行
   - 进入结果页，确认文件树、预览和 reviewer/export 区域可见
 - 如果只是静态校验，不必默认启用 Playwright；仅在交互或视觉状态需要验证时使用
+
+### Preview Mode
+
+当前运行页与结果页支持前端预览态，用于在没有真实 `draftId/runId/courseId` 上下文时检查样式、布局和纯前端交互：
+
+```text
+/runs/preview?mode=preview&scenario=running
+/runs/preview?mode=preview&scenario=completed
+/courses/preview/results?mode=preview&scenario=running
+/courses/preview/results?mode=preview&scenario=completed
+```
+
+说明：
+
+- 预览态不请求真实 `runs` / `artifacts` / `results-context` API
+- 预览态仅用于内部 UI 调试；产品流程导航不会自动把用户带进 preview route
+- 正常从输入页 / 配置页点击“运行”或“结果”时，不会进入 preview；产品默认会直接进入真实工作台
+- 运行页会显示 mock 的章节并发、日志和状态摘要
+- 结果页会显示 mock 的文件树、章节状态、review/export 区域和文件预览
+- 预览态允许文件树选择、预览切换和导出筛选框勾选等纯前端交互
+- `Resume`、`Clean`、真实导出等会触发后端动作的控件在预览态下会被禁用，并明确标注 `Preview`
 
 当进入人工测试批次时，额外补一条 `clean-browser baseline`：
 
@@ -388,24 +450,70 @@ out/_gui/frontend-dev.log
 
 这条基线用于人工验收与远程协同排障，不替代用户自己的真实浏览器测试。
 
+## Frontend Asset And Copy Guardrails
+
+当前默认产品页在前端资产与文案上遵循以下规则：
+
+- 品牌 Logo、图标字体、favicon 等核心视觉资产优先放在 `web/public/`，避免依赖远端 CDN 或运行时网络可达性。
+- `Material Symbols` 这类字体图标如果进入默认产品页，必须保证本地可加载；不能把导航或主操作图标建立在浏览器能访问外部字体服务的前提上。
+- 品牌主标识优先使用正式静态文件，而不是长期依赖临时内联 SVG。
+- 用户可见文案应表达产品状态、下一步动作和业务结果；不要直接暴露“伪空态”“不会伪造进度或日志”“内部兜底策略”这类实现说明。
+- 当视觉参考来自 Stitch 等静态样例时，样例负责审美与层级，正式行为与信息来源仍以后端 contract 和 `docs/` 正式文档为准。
+
 ## Current Notes
 
 - 输入页当前的最小可执行输入是：教材名 + 字幕文本；字幕会落盘到 GUI draft input 目录，供 `run-course` 使用。
+- 输入页当前只在产品界面暴露本地素材输入，不再显示“课程链接”入口；后端草稿字段仍保留兼容历史数据。
+- 默认产品页当前使用本地静态品牌 Logo 与本地 `Material Symbols` 字体；导航与主操作图标不再依赖远端字体服务。
+- 默认产品路由当前已切到基于 Stitch V4 参考样例的产品页：
+  - `/`
+  - `/courses/new/input`
+  - `/courses/new/config`
+  - `/runs`
+  - `/runs/[runId]`
+  - `/courses/results`
+  - `/courses/[courseId]/results`
+- 当前默认产品页只替换展示层与页面信息架构；输入、配置、运行、结果的真实 API 和 runtime 语义保持兼容。
+- `/runs` 当前不再使用产品空态页；即使尚未创建真实 run，也会直接渲染未开始工作台，并在主状态区标注“任务未开始”。
+- `/courses/results` 当前不再使用产品空态页；即使尚无当前课程快照，也会直接渲染结果工作台，并按 snapshot 结构展示可用的最终产物分组。
 - GUI 草稿在生成 `course_id` 前会先 `strip()` 教材名，避免用户输入前后空格时，GUI 指向的课程目录和 pipeline 真正写入的目录不一致。
 - `runs` 已接通本地 `LocalProcessRunner`，通过 `runtime_state.json` 和 `course_blueprint.json` 映射阶段状态。
 - 运行页顶部的 `View` 只表示当前页面类型；真正的运行状态以“运行总状态”和阶段轨道为准。
 - 当前默认执行后端仍可设为 `heuristic`；只有当 GUI 默认值或课程覆盖显式切到 hosted provider，GUI 才会真正调用外部 AI 服务。
+- 配置页当前将“AI 服务配置”作为独立信息区展示；课程级运行时覆盖编辑器继续从 GUI 隐藏，但已有历史草稿里的覆盖值仍会继续参与 runtime 解析。
 - 配置页的“启动 / 继续运行”遵循 CLI 的 resume 语义：同一 `course_id` 下已有且仍然有效的 checkpoint 会被复用，不默认强制全量重跑。
 - `resume` 会继续同一个 run 的冻结流水线身份；如果你修改了 provider/model/base_url/key/timeout，恢复时会读取新 routing；如果你修改了模板或 Review 策略，请创建新的 run。
 - 运行页已接入 `SSE` 事件流，并提供 `resume` / `clean` 控制动作。
+- 运行页的主视图已调整为并发展示多个章节的执行进度，原先串行的 stages 列表降级为课程级次要信息。
 - 运行页右侧已接入日志面板：先拉取 log preview，再通过 `run.log` 事件流增量追加。
 - 运行页摘要卡现在会明确显示 `backend`、`hosted/heuristic`、`simple_model`、`complex_model`、`review_mode`、`target_output`，用于区分“页面已打开”和“runtime 实际采用的配置”。
 - `RunSession` 当前会持久化到 `out/_gui/runs/<run_id>/session.json`，后端重启后，已存在的 run 页面不再直接因内存态丢失而 404。
+- `RunSession` 当前额外暴露 `chapter_progress[]`，每章会返回 `status`、`current_step`、`completed_step_count`、`total_step_count`、`export_ready`，供并发态运行页与结果页消费。
+- `chapter_progress[].export_ready` 只在当前 `target_output` + `review_enabled` 所要求的全部章节 step 都完成时为 `true`；不会因为 `notebooklm/*` 或某个中间文件已存在就提前变成 completed。
 - 历史 run 的 `process.log` 当前也支持在后端重启后恢复读取；日志面板不再依赖 runner 的内存 snapshot 才能显示旧日志。
 - `runtime_state.json` 当前会额外持久化 `run_identity`，用于恢复时锁定 `review_enabled`、`review_mode` 和 `target_output`。
-- 结果页已接通 artifacts tree、文件预览、review 摘要和 ZIP 导出。
-- 结果页文件树当前按 `章节 -> 最终产物 / 中间数据 -> 文件` 分层；若对应 run 尚未完成，会显示“文件仍在生成中”的提示，而不是把空树误判为失败。
+- `runtime_state.json` 当前也会在 step 级记录 `attempt_count`、`last_error_kind`、`retry_history`，用于 transient retry 与自动恢复追责：
+  - `attempt_count`：该 step 实际发起的调用次数
+  - `retry_history`：按尝试顺序记录每次 error/completed 与 `will_retry`
+  - `last_error_kind`：最近一次失败尝试的错误类型；即使最终一次已成功，也可能保留最后一次 transient error 的种类
+- 结果页已接通 snapshot-driven 文件树、文件预览、review 摘要和 ZIP 导出。
+- 结果页已暴露 artifacts API 的两类导出过滤参数（默认关闭，需用户显式勾选）：
+  - “只导出已完成章节”（`completed_chapters_only=true`）：只导出严格口径 `export_ready` 的章节作用域文件；课程根文件与非章节文件仍保留
+  - “仅导出最终产物”（`final_outputs_only=true`）：只导出 `chapters/<chapter_id>/notebooklm/*`
+- 两个过滤参数同时存在时，结果是“严格 completed chapter”与“最终产物目录”的交集。
+- 结果页文件树已支持渲染按课程级最新 context 获取的章节状态（pending/running/failed/completed/export_ready），同时当 URL 中带有特定 runId 时会通过 badge 提示当前是 Scoped view。
+- 结果页文件树在 `SSE` 自动刷新时会保持当前的展开与选中状态，不再盲目展开新节点。
+- 结果页当前主树来自 snapshot 只读接口：
+  - `GET /results-snapshot`：默认 `/courses/results` 工作台使用；后端会按最新 run 时间选择当前课程，并返回其他课程的历史快照
+  - `GET /courses/{course_id}/results-snapshot`：显式绑定课程的结果页使用
+  - 主树只展示最终目标 `.md`；中间 JSON、runtime 和 review 文件不再进入主树。
+- 结果页主树当前按“过去课程产物 / 当前课程产物”分区：
+  - 过去课程产物：其他 `course_id` 的历史 run 快照
+  - 当前课程产物：当前 `course_id` 下按 `run_id -> chapter_id -> notebooklm/*.md` 展示的最终产物
+- 当前 URL 若带 `runId`，结果页会在当前课程分区内对对应 run 标注“当前 run”；这只是 scoped 标识，不会改变课程级最新状态来源。
+- 若对应 run 尚未完成，结果页会显示“文件仍在生成中”的提示，而不是把空树误判为失败。
 - 如果结果页在 run 仍未完成时已经打开，artifact tree 与 review summary 当前会在 `run.update` 推进时自动刷新，不需要手动刷新页面。
+- 运行页和结果页当前都不再存在独立产品空态页；只有显式 `mode=preview` 才会进入内部调试预览态，不会由产品流程自动带入。
 - FastAPI 默认以仓库根目录推导 `workspace_root` 与 `out/`，结果页不再依赖 uvicorn 是从哪个当前目录启动的。
 - 左侧 `运行` / `结果` 导航和首页入口不再使用 `demo` 占位路由；只有真实 `run_id` / `course_id` 已绑定时才会启用对应入口。
 - 当从运行页或结果页返回输入/配置页时，shell 现在会继续保留 `draftId/runId/courseId`，避免 sidebar 把 `运行` / `结果` 重新打回 `pending`。
@@ -416,13 +524,19 @@ out/_gui/frontend-dev.log
   - `simple_model`
   - `complex_model`
   - `timeout_seconds`
+  - `max_concurrent_per_run`
+  - `max_concurrent_global`
+  - `max_call_attempts`
+  - `max_resume_attempts`
   - `review_enabled`
   - `template` -> `policy.target_output`
   - `review_mode` -> `policy.review_mode`
+- provider policy 这四项当前从 provider 默认层进入 runtime，不跟随课程草稿单独覆盖。
 - `build-blueprint` / `run-course` 当前会把 `simple_model` 中映射给 `blueprint_builder` 的 override 直接用于 blueprint 生成阶段，不再回落到 provider 默认模型。
 - 如果草稿尚未保存模板配置，GUI 运行默认按 `interview_knowledge_base` 解释章节 writer 集合与阶段轨道，不再错误回落到 `standard_knowledge_pack`。
 - `clean-course` 如果在运行中遇到后端重启，状态恢复会优先依据课程 runtime 目录是否已删除来判断 `cleaned`，避免清理完成后仍长期显示 `running`。
 - 运行状态恢复当前会以 `runtime_state.json` 里的实际 chapter scopes 为准，而不是 blueprint 中声明的章节总数；当 TOC 章节数和实际输入章节数不一致时，重启后也不会因为完成计数永远达不到 blueprint 总数而卡在 `running`。
-- `content_density` 和 `export ZIP` 仍然是产品层配置，还没有进入 `run-course` 的 runtime contract。
+- `GET /runs/{id}` 的自动恢复只覆盖 failed 的章节 run，并要求 `last_error_kind` 仍被判定为 transient 且 `max_resume_attempts` 预算未耗尽；permanent failure、`clean-course` 失败和 provider 配置丢失后的重启恢复都不会自动 `resume-course`。
+- `content_density` 仍然是产品层配置，没有进入 `run-course` 的 runtime contract；结果页导出过滤则是 artifacts API 合同，不属于 pipeline identity。
 - checkpoint 有效性现在同时受 `blueprint_hash` 和 pipeline signature 约束；当 pipeline/runtime contract 变更时，旧产物会在下一次运行时自动失效并重跑。
 - 同课程名当前继续复用同一 `course_id`；新章节会追加到同一课程目录。

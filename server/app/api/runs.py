@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
 from server.app.application.runs import DraftNotReadyError, RunConflictError, RunConfigurationError, RunService
-from server.app.models.run_session import CreateRunRequest, RunLogChunk, RunLogPreview, RunSession
+from server.app.models.run_session import CourseResultsContext, CreateRunRequest, RunLogChunk, RunLogPreview, RunSession
 
 
 def build_runs_router(service: RunService) -> APIRouter:
@@ -117,5 +117,9 @@ def build_runs_router(service: RunService) -> APIRouter:
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache"},
         )
+
+    @router.get("/courses/{course_id}/results-context", response_model=CourseResultsContext)
+    def get_course_results_context(course_id: str) -> CourseResultsContext:
+        return service.get_course_results_context(course_id)
 
     return router

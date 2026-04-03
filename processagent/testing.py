@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 from dataclasses import dataclass
+from threading import local
 from typing import Any
 
 
@@ -10,7 +11,10 @@ from typing import Any
 class StubLLMBackend:
     responses: dict[str, Any]
     calls: list[dict[str, Any]] | None = None
-    _last_call_metadata: dict[str, Any] | None = None
+    _call_metadata: Any = None
+
+    def __post_init__(self) -> None:
+        self._call_metadata = local()
 
     def generate_json(
         self,
@@ -30,7 +34,7 @@ class StubLLMBackend:
             }
         )
         response = self._resolve_json_response(agent_name)
-        self._last_call_metadata = {
+        self._call_metadata.value = {
             "provider": "stub",
             "model": model_override,
             "input_tokens": self._estimate_tokens(payload),
@@ -59,7 +63,7 @@ class StubLLMBackend:
             }
         )
         response = self._resolve_text_response(agent_name)
-        self._last_call_metadata = {
+        self._call_metadata.value = {
             "provider": "stub",
             "model": model_override,
             "input_tokens": self._estimate_tokens(payload),
@@ -71,8 +75,8 @@ class StubLLMBackend:
         return str(response)
 
     def consume_last_call_metadata(self) -> dict[str, Any] | None:
-        metadata = self._last_call_metadata
-        self._last_call_metadata = None
+        metadata = getattr(self._call_metadata, "value", None)
+        self._call_metadata.value = None
         return metadata
 
     def _estimate_tokens(self, value: dict[str, Any] | str) -> int:

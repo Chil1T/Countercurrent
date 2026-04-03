@@ -2,12 +2,21 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class StageStatus(BaseModel):
     name: str
     status: str
+
+
+class ChapterProgress(BaseModel):
+    chapter_id: str
+    status: str
+    current_step: str | None = None
+    completed_step_count: int = 0
+    total_step_count: int = 0
+    export_ready: bool = False
 
 
 class CreateRunRequest(BaseModel):
@@ -20,6 +29,7 @@ class RunSession(BaseModel):
     id: str
     draft_id: str
     course_id: str
+    created_at: str | None = None
     status: str
     run_kind: Literal["chapter", "global"] = "chapter"
     backend: str = "heuristic"
@@ -32,6 +42,8 @@ class RunSession(BaseModel):
     review_enabled: bool = False
     review_mode: str | None = None
     stages: list[StageStatus]
+    chapter_progress: list[ChapterProgress] = Field(default_factory=list)
+    snapshot_complete: bool = False
     last_error: str | None = None
 
 
@@ -48,3 +60,8 @@ class RunLogChunk(BaseModel):
     cursor: int
     content: str
     complete: bool
+
+class CourseResultsContext(BaseModel):
+    course_id: str
+    latest_run: RunSession | None = None
+

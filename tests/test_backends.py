@@ -1,10 +1,32 @@
 import argparse
 import json
 import os
+import threading
 import unittest
 
 from processagent.cli import create_backend, resolve_stage_models
-from processagent.llm import AnthropicMessagesBackend, OpenAICompatibleResponsesBackend, parse_json_text
+from processagent.llm import (
+    AnthropicMessagesBackend,
+    LLMNetworkError,
+    OpenAICompatibleResponsesBackend,
+    OpenAIResponsesBackend,
+    _coerce_network_error,
+    _is_transient_network_os_error,
+    parse_json_text,
+)
+
+
+class ConcurrentMetadataOpenAIBackend(OpenAIResponsesBackend):
+    def _post_json(self, url: str, body: dict[str, object], headers: dict[str, str]) -> dict[str, object]:
+        model = str(body["model"])
+        token_seed = 101 if model == "model-a" else 202
+        return {
+            "output_text": "{\"status\":\"ok\"}",
+            "usage": {
+                "input_tokens": token_seed,
+                "output_tokens": token_seed + 1,
+            },
+        }
 
 
 class BackendFactoryTest(unittest.TestCase):
@@ -273,6 +295,78 @@ class OpenAICompatibleBackendTest(unittest.TestCase):
         self.assertIn("messages", body)
         self.assertNotIn("input", body)
         self.assertEqual(body["response_format"], {"type": "json_object"})
+
+
+class OpenAIResponsesBackendMetadataTest(unittest.TestCase):
+    def test_concurrent_calls_keep_metadata_thread_local(self) -> None:
+        backend = ConcurrentMetadataOpenAIBackend(model="gpt-test")
+        original = os.environ.get("OPENAI_API_KEY")
+        os.environ["OPENAI_API_KEY"] = "test-key"
+        first_generated = threading.Event()
+        allow_first_consume = threading.Event()
+        results: dict[str, dict[str, object] | None] = {}
+
+        def run_first() -> None:
+            backend.generate_json("curriculum_anchor", "prompt", {"chapter_id": "第一章"}, model_override="model-a")
+            first_generated.set()
+            allow_first_consume.wait(timeout=2)
+            results["first"] = backend.consume_last_call_metadata()
+
+        def run_second() -> None:
+            first_generated.wait(timeout=2)
+            backend.generate_json("curriculum_anchor", "prompt", {"chapter_id": "第二章"}, model_override="model-b")
+            allow_first_consume.set()
+            results["second"] = backend.consume_last_call_metadata()
+
+        try:
+            first_thread = threading.Thread(target=run_first)
+            second_thread = threading.Thread(target=run_second)
+            first_thread.start()
+            second_thread.start()
+            first_thread.join(timeout=3)
+            second_thread.join(timeout=3)
+        finally:
+            if original is None:
+                os.environ.pop("OPENAI_API_KEY", None)
+            else:
+                os.environ["OPENAI_API_KEY"] = original
+
+        self.assertFalse(first_thread.is_alive())
+        self.assertFalse(second_thread.is_alive())
+        self.assertEqual(results["first"]["model"], "model-a")
+        self.assertEqual(results["first"]["input_tokens"], 101)
+        self.assertEqual(results["second"]["model"], "model-b")
+        self.assertEqual(results["second"]["input_tokens"], 202)
+
+
+class NetworkErrorMappingTest(unittest.TestCase):
+    @staticmethod
+    def _windows_os_error(*, winerror: int, errno: int | None = None, message: str) -> OSError:
+        error = OSError(0 if errno is None else errno, message)
+        error.winerror = winerror
+        return error
+
+    def test_coerce_network_error_maps_windows_winsock_transient_codes(self) -> None:
+        scenarios = [
+            (10054, "connection_reset"),
+            (10060, "timeout"),
+            (10061, "connection_error"),
+        ]
+
+        for winerror, expected_kind in scenarios:
+            with self.subTest(winerror=winerror):
+                error = self._windows_os_error(winerror=winerror, message=f"winsock {winerror}")
+
+                mapped = _coerce_network_error(error)
+
+                self.assertIsInstance(mapped, LLMNetworkError)
+                self.assertEqual(mapped.kind, expected_kind)
+
+    def test_is_transient_network_os_error_accepts_windows_winsock_transient_codes(self) -> None:
+        for winerror in (10054, 10060, 10061):
+            with self.subTest(winerror=winerror):
+                error = self._windows_os_error(winerror=winerror, message=f"winsock {winerror}")
+                self.assertTrue(_is_transient_network_os_error(error))
 
 
 class JsonParsingTest(unittest.TestCase):

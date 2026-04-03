@@ -26,7 +26,9 @@
 - GUI 页面闭环不能替代 runtime contract 闭环；凡是涉及 `run/resume/clean/status` 的功能，先确认真实 `input_dir`、`output_dir`、`book_title` 已可执行。
 - 运行页或运行 API 的状态展示，先定义状态机，再实现 UI 或事件流。
 - Context 栏、运行摘要和结果页加载态应优先反映当前生效的 runtime 值；不要优先展示静态 draft 占位信息。
-- `resume` 继续的是同一个 run 的冻结流水线身份：`target_output`、`review_enabled`、`review_mode` 与 stage graph 必须锁定；恢复时只重新解析当前 `provider/base_url/api_key/model/timeout`。如果要改模板或 Review 策略，请创建新的 run。
+- 默认产品页使用的品牌 Logo、图标字体等核心视觉资产应优先本地化到 `web/public/`；不要把远端字体/CDN 可达性当成产品可用性的前提。
+- 用户可见文案只描述产品状态与可执行动作；不要把“伪空态”“不伪造进度”“内部实现兜底”这类实现说明直接暴露给最终用户。
+- `resume` 继续的是同一个 run 的冻结流水线身份：`target_output`、`review_enabled`、`review_mode` 与 stage graph 必须锁定；恢复时只重新解析当前 `provider/base_url/api_key/model/timeout` 与 provider policy 覆盖（`max_concurrent_per_run`、`max_concurrent_global`、`max_call_attempts`、`max_resume_attempts`）。如果要改模板或 Review 策略，请创建新的 run。
 - 当 runtime/config 字段新增或语义变化时，至少同时更新 `docs/runbooks/gui-dev.md`、`docs/runbooks/run-course.md`，必要时再补 `docs/README.md` 或 `docs/workstreams/` 的当前基线。
 - repo 内文档系统是 planner/executor 的操作界面；新规则优先落到 `docs/` 或最近的 `AGENTS.md`，不要散落在会话里。
 - 仅在目录行为真的不同的时候添加 nested `AGENTS.md`。当前有效 nested 入口只有 `processagent/`、`tests/`、`docs/`。

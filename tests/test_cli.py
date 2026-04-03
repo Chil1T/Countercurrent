@@ -4,9 +4,13 @@ import sys
 import tempfile
 import unittest
 from argparse import Namespace
+from contextlib import ExitStack
 from pathlib import Path
+from unittest.mock import patch
 
 from processagent.blueprint import build_course_id
+import processagent.cli as cli
+
 from processagent.cli import _build_blueprint
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -48,7 +52,368 @@ class _RecordingBlueprintBackend:
         }
 
 
+class _RecordingPipelineRunner:
+    instances: list["_RecordingPipelineRunner"] = []
+
+    def __init__(self, config, llm_backend) -> None:
+        self.config = config
+        self.llm_backend = llm_backend
+        self.run_called = False
+        type(self).instances.append(self)
+
+    def run(self) -> None:
+        self.run_called = True
+
+
 class CliTest(unittest.TestCase):
+    def test_runtime_subcommands_accept_provider_policy_flags_without_leaking_to_other_subcommands(self) -> None:
+        parser = cli.build_parser()
+        runtime_commands = (
+            (
+                "run-course",
+                [
+                    "--book-title",
+                    "数据库系统概论",
+                    "--input-dir",
+                    ".",
+                    "--output-dir",
+                    ".",
+                    "--max-concurrent-per-run",
+                    "2",
+                    "--max-concurrent-global",
+                    "5",
+                    "--max-call-attempts",
+                    "4",
+                    "--max-resume-attempts",
+                    "3",
+                ],
+            ),
+            (
+                "resume-course",
+                [
+                    "--book-title",
+                    "数据库系统概论",
+                    "--input-dir",
+                    ".",
+                    "--output-dir",
+                    ".",
+                    "--max-concurrent-per-run",
+                    "2",
+                    "--max-concurrent-global",
+                    "5",
+                    "--max-call-attempts",
+                    "4",
+                    "--max-resume-attempts",
+                    "3",
+                ],
+            ),
+            (
+                "build-global",
+                [
+                    "--book-title",
+                    "数据库系统概论",
+                    "--output-dir",
+                    ".",
+                    "--max-concurrent-per-run",
+                    "2",
+                    "--max-concurrent-global",
+                    "5",
+                    "--max-call-attempts",
+                    "4",
+                    "--max-resume-attempts",
+                    "3",
+                ],
+            ),
+        )
+
+        for command, argv in runtime_commands:
+            with self.subTest(command=command):
+                try:
+                    args = parser.parse_args([command, *argv])
+                except SystemExit as error:
+                    self.fail(f"{command} should accept provider policy flags: {error}")
+                self.assertEqual(args.max_concurrent_per_run, 2)
+                self.assertEqual(args.max_concurrent_global, 5)
+                self.assertEqual(args.max_call_attempts, 4)
+                self.assertEqual(args.max_resume_attempts, 3)
+
+        with self.assertRaises(SystemExit):
+            parser.parse_args(
+                [
+                    "build-blueprint",
+                    "--book-title",
+                    "数据库系统概论",
+                    "--input-dir",
+                    ".",
+                    "--output-dir",
+                    ".",
+                    "--max-concurrent-per-run",
+                    "2",
+                ]
+            )
+
+    def test_resolve_provider_policy_uses_cli_overrides_over_gui_defaults(self) -> None:
+        self.assertTrue(hasattr(cli, "resolve_provider_policy"), "processagent.cli.resolve_provider_policy should exist")
+
+        policy = cli.resolve_provider_policy(
+            Namespace(
+                backend="openai",
+                max_concurrent_per_run=4,
+                max_concurrent_global=None,
+                max_call_attempts=7,
+                max_resume_attempts=None,
+            ),
+            {
+                "max_concurrent_per_run": 2,
+                "max_concurrent_global": 6,
+                "max_call_attempts": 5,
+                "max_resume_attempts": 3,
+            },
+        )
+
+        self.assertEqual(policy.provider, "openai")
+        self.assertEqual(policy.max_concurrent_per_run, 4)
+        self.assertEqual(policy.max_concurrent_global, 6)
+        self.assertEqual(policy.max_call_attempts, 7)
+        self.assertEqual(policy.max_resume_attempts, 3)
+
+    def test_runtime_handlers_preserve_provider_policy_in_pipeline_config(self) -> None:
+        parser = cli.build_parser()
+        blueprint = {
+            "course_id": build_course_id("数据库系统概论"),
+            "course_name": "数据库系统概论",
+            "source_type": "published_textbook",
+            "book": {"title": "数据库系统概论"},
+            "policy": {"review_mode": "light", "target_output": "interview_knowledge_base"},
+            "blueprint_hash": "hash",
+            "chapters": [{"chapter_id": "第一章·绪论", "title": "绪论"}],
+        }
+        runtime_state = {
+            "run_identity": {
+                "review_enabled": False,
+                "review_mode": "light",
+                "target_output": "interview_knowledge_base",
+            }
+        }
+        backend = type("Backend", (), {"model": "gpt-test"})()
+        cases = (
+            (
+                "run-course",
+                [
+                    "--book-title",
+                    "数据库系统概论",
+                    "--input-dir",
+                    ".",
+                    "--output-dir",
+                    ".",
+                    "--backend",
+                    "openai",
+                    "--max-concurrent-per-run",
+                    "2",
+                    "--max-concurrent-global",
+                    "5",
+                    "--max-call-attempts",
+                    "4",
+                    "--max-resume-attempts",
+                    "3",
+                ],
+            ),
+            (
+                "resume-course",
+                [
+                    "--book-title",
+                    "数据库系统概论",
+                    "--input-dir",
+                    ".",
+                    "--output-dir",
+                    ".",
+                    "--backend",
+                    "openai",
+                    "--max-concurrent-per-run",
+                    "2",
+                    "--max-concurrent-global",
+                    "5",
+                    "--max-call-attempts",
+                    "4",
+                    "--max-resume-attempts",
+                    "3",
+                ],
+            ),
+            (
+                "build-global",
+                [
+                    "--book-title",
+                    "数据库系统概论",
+                    "--output-dir",
+                    ".",
+                    "--backend",
+                    "openai",
+                    "--max-concurrent-per-run",
+                    "2",
+                    "--max-concurrent-global",
+                    "5",
+                    "--max-call-attempts",
+                    "4",
+                    "--max-resume-attempts",
+                    "3",
+                ],
+            ),
+        )
+
+        for command, argv in cases:
+            with self.subTest(command=command):
+                _RecordingPipelineRunner.instances = []
+                args = parser.parse_args([command, *argv])
+                with ExitStack() as stack:
+                    stack.enter_context(patch.object(cli, "create_backend", return_value=backend))
+                    stack.enter_context(patch.object(cli, "PipelineRunner", _RecordingPipelineRunner))
+                    if command == "run-course":
+                        stack.enter_context(patch.object(cli, "_build_blueprint", return_value=blueprint))
+                        stack.enter_context(
+                            patch.object(
+                                cli,
+                                "apply_policy_overrides",
+                                side_effect=lambda course_blueprint, review_mode=None, target_output=None: course_blueprint,
+                            )
+                        )
+                    else:
+                        stack.enter_context(patch.object(cli, "_load_existing_course_blueprint", return_value=blueprint))
+                    if command == "resume-course":
+                        stack.enter_context(patch.object(cli, "_load_existing_runtime_state", return_value=runtime_state))
+
+                    result = args.handler(args)
+
+                self.assertEqual(result, 0)
+                self.assertEqual(len(_RecordingPipelineRunner.instances), 1)
+                runner = _RecordingPipelineRunner.instances[0]
+                self.assertTrue(runner.run_called)
+                self.assertTrue(hasattr(runner.config, "provider_policy"))
+                self.assertEqual(runner.config.provider_policy.provider, "openai")
+                self.assertEqual(runner.config.provider_policy.max_concurrent_per_run, 2)
+                self.assertEqual(runner.config.provider_policy.max_concurrent_global, 5)
+                self.assertEqual(runner.config.provider_policy.max_call_attempts, 4)
+                self.assertEqual(runner.config.provider_policy.max_resume_attempts, 3)
+
+    def test_runtime_subcommands_accept_run_id_and_forward_it_into_pipeline_config(self) -> None:
+        parser = cli.build_parser()
+        backend = type("Backend", (), {"model": "gpt-test"})()
+        blueprint = {
+            "course_id": build_course_id("数据库系统概论"),
+            "course_name": "数据库系统概论",
+            "source_type": "published_textbook",
+            "book": {"title": "数据库系统概论"},
+            "policy": {"review_mode": "light", "target_output": "interview_knowledge_base"},
+            "blueprint_hash": "hash",
+            "chapters": [{"chapter_id": "第一章·绪论", "title": "绪论"}],
+        }
+        runtime_state = {
+            "run_identity": {
+                "review_enabled": False,
+                "review_mode": "light",
+                "target_output": "interview_knowledge_base",
+            }
+        }
+        cases = (
+            (
+                "run-course",
+                [
+                    "--book-title",
+                    "数据库系统概论",
+                    "--input-dir",
+                    ".",
+                    "--output-dir",
+                    ".",
+                    "--backend",
+                    "openai",
+                    "--run-id",
+                    "run-preview-1234",
+                ],
+            ),
+            (
+                "resume-course",
+                [
+                    "--book-title",
+                    "数据库系统概论",
+                    "--input-dir",
+                    ".",
+                    "--output-dir",
+                    ".",
+                    "--backend",
+                    "openai",
+                    "--run-id",
+                    "run-preview-1234",
+                ],
+            ),
+        )
+
+        for command, argv in cases:
+            with self.subTest(command=command):
+                _RecordingPipelineRunner.instances = []
+                args = parser.parse_args([command, *argv])
+                with ExitStack() as stack:
+                    if command != "clean-course":
+                        stack.enter_context(patch.object(cli, "create_backend", return_value=backend))
+                    stack.enter_context(patch.object(cli, "PipelineRunner", _RecordingPipelineRunner))
+                    if command == "run-course":
+                        stack.enter_context(patch.object(cli, "_build_blueprint", return_value=blueprint))
+                        stack.enter_context(
+                            patch.object(
+                                cli,
+                                "apply_policy_overrides",
+                                side_effect=lambda course_blueprint, review_mode=None, target_output=None: course_blueprint,
+                            )
+                        )
+                    else:
+                        stack.enter_context(patch.object(cli, "_load_existing_course_blueprint", return_value=blueprint))
+                        stack.enter_context(patch.object(cli, "_load_existing_runtime_state", return_value=runtime_state))
+
+                    result = args.handler(args)
+
+                self.assertEqual(result, 0)
+                self.assertEqual(len(_RecordingPipelineRunner.instances), 1)
+                runner = _RecordingPipelineRunner.instances[0]
+                self.assertEqual(getattr(runner.config, "run_id", None), "run-preview-1234")
+
+        clean_args = parser.parse_args(
+            [
+                "clean-course",
+                "--book-title",
+                "数据库系统概论",
+                "--input-dir",
+                ".",
+                "--output-dir",
+                ".",
+                "--run-id",
+                "run-preview-1234",
+            ]
+        )
+        self.assertEqual(clean_args.run_id, "run-preview-1234")
+
+    def test_runtime_subcommands_reject_invalid_provider_policy_values_with_argument_error(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "processagent.cli",
+                "run-course",
+                "--book-title",
+                "数据库系统概论",
+                "--input-dir",
+                ".",
+                "--output-dir",
+                ".",
+                "--max-concurrent-per-run",
+                "0",
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("max-concurrent-per-run", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
     def test_build_blueprint_applies_blueprint_builder_model_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -1,5 +1,152 @@
 # Plans
 
+## 2026-04-01 Run / Results Snapshot-Driven Redesign
+
+- Status: completed
+- Goal: 为 `Run` 与 `Results` 引入 `run_id` 级最终产物快照和新的默认工作台语义，移除产品空态页，并让结果树按 `course_id -> run_id -> md` 展示最终学习产物。
+
+### Scope
+
+- 新增 `out/_gui/results-snapshots/<course_id>/<run_id>/chapters/<chapter_id>/notebooklm/*.md` 快照层
+- 新增 `results-snapshot` read API 与前端结果树接线
+- `/runs` 改为未开始工作台，不再是空态页
+- `/courses/results` 改为默认结果工作台，不再是空态页
+- 结果树按 `course_id -> run_id -> chapter_id -> md` 只展示最终 `.md`
+- 保留既有 `review-summary`、导出过滤、preview 边界与兼容 `artifacts/*` API
+
+### Execution Batches
+
+1. 已完成：backend snapshot contract 与 `results-snapshot` 读取合同
+2. 已完成：Run 未开始态工作台与 `/runs` 路由替换
+3. 已完成：Results snapshot 工作台与 `/courses/results` 路由替换
+4. 已完成：文档、批次索引、死代码清理与最终验证
+
+### Validation
+
+- `python -m unittest server.tests.test_runs_api server.tests.test_artifacts_api tests.test_pipeline -v`
+- `cd web; node --experimental-strip-types --test tests/app-shell-state.test.ts tests/run-v2-workbench.test.ts tests/run-workbench-layout.test.ts tests/preview-mode.test.ts tests/results-v2-workbench.test.ts tests/results-layout.test.ts tests/results-workbench-state.test.ts tests/results-refresh.test.ts tests/results-view.test.ts tests/results-interaction.test.ts tests/artifacts-api.test.ts`
+- `cd web; npm run lint`
+- `cd web; npm run build`
+
+## 2026-04-01 Stitch V2 High-Fidelity Alignment
+
+- Status: in_progress
+- Goal: 在当前 Stitch V2 路由迁移基础上，进一步把默认 GUI 的字体、图标、配色、壳层、间距、圆角和页面骨架尽量对齐到 Stitch 导出代码，同时完整保留当前已接上的真实功能与语义。
+
+### Scope
+
+- 切换到 `Manrope + Inter + Material Symbols`
+- 共享壳层、token、表面层级、按钮和导航高保真对齐 Stitch
+- 五页继续逐页向 Stitch 导出结构收敛
+- Stitch 多出来的组件按“真实功能 -> 即将到来 -> 删除”处理
+- `Run / Results` 的空态与结果树语义后续由 `2026-04-01 Run / Results Snapshot-Driven Redesign` supersede
+- 文档与浏览器级视觉验证收口
+
+### Execution Batches
+
+1. 待执行：共享设计系统与壳层高保真对齐
+2. 待执行：Overview 与壳层额外动作对齐
+3. 待执行：Input / Config 高保真对齐
+4. 待执行：Run / Results 高保真对齐
+5. 待执行：路由级收口、文档与最终验证
+
+### Validation
+
+- `cd web; node --experimental-strip-types --test tests/app-shell-branding.test.ts tests/app-shell-state.test.ts tests/overview-v2-workbench.test.ts tests/input-v2-workbench.test.ts tests/input-workbench-ui.test.ts tests/config-v2-workbench.test.ts tests/config-workbench-ui.test.ts tests/run-v2-workbench.test.ts tests/run-workbench-layout.test.ts tests/run-workbench-chapter-progress.test.ts tests/results-v2-workbench.test.ts tests/results-layout.test.ts tests/results-workbench-state.test.ts tests/results-refresh.test.ts tests/results-view.test.ts tests/results-tree-chapter-status.test.ts tests/results-interaction.test.ts tests/artifacts-api.test.ts tests/preview-mode.test.ts`
+- `cd web; npm run lint`
+- `cd web; npm run build`
+
+## 2026-04-01 Stitch V2 Frontend Migration
+
+- Status: completed
+- Goal: 以 Stitch 五页设计稿为目标界面，高保真迁移默认 GUI 页面骨架，同时完整保留当前输入、配置、运行、结果、空态与 preview 的真实功能和语义。
+
+### Scope
+
+- 建立 Stitch V2 共享设计系统与页面骨架
+- 迁移 Overview、Input、Config、Run、Results 五页
+- 保持产品空态与内部 preview 调试态边界
+- 默认产品路由切到 V2
+- 文档、批次索引与最终验证收口
+
+### Execution Batches
+
+1. 已完成：共享设计系统与壳层基础
+2. 已完成：Overview 与产品空态
+3. 已完成：Input V2
+4. 已完成：Config V2
+5. 已完成：Run V2
+6. 已完成：Results V2
+7. 已完成：默认路由切换与迁移债务清理
+8. 已完成：文档、索引与最终验证
+
+### Validation
+
+- `node --experimental-strip-types --test web/tests/app-shell-branding.test.ts web/tests/app-shell-state.test.ts web/tests/overview-v2-workbench.test.ts web/tests/input-v2-workbench.test.ts web/tests/config-v2-workbench.test.ts web/tests/run-v2-workbench.test.ts web/tests/results-v2-workbench.test.ts web/tests/preview-mode.test.ts web/tests/artifacts-api.test.ts web/tests/input-workbench-ui.test.ts web/tests/config-workbench-view.test.ts web/tests/config-workbench-ui.test.ts web/tests/context-panel.test.ts web/tests/results-layout.test.ts web/tests/results-workbench-state.test.ts web/tests/results-refresh.test.ts web/tests/results-view.test.ts web/tests/results-tree-chapter-status.test.ts web/tests/results-interaction.test.ts web/tests/run-workbench-layout.test.ts web/tests/run-workbench-chapter-progress.test.ts`
+- `npm run lint`
+- `npm run build`
+
+## 2026-03-30 GUI Concurrency / Results UX
+
+- Status: completed
+- Goal: 重构运行页与结果页的信息架构，使 GUI 能正确表达多章节并发、课程级章节状态、过滤导出和稳定文件树交互，而不打破当前 runtime contract。
+
+### Scope
+
+- 运行页以章节卡片为主视图展示并发进度
+- 结果页以课程级最新状态标记章节文件夹
+- 导出区支持“仅已完成章节 / 仅最终产物”
+- 文件树自动刷新但保留手动展开状态与当前选中文件
+- 结果页左右布局在深层展开下保持稳定
+
+### Execution Batches
+
+1. 已完成：补课程级结果状态 read API
+2. 已完成：运行页并发章节卡片视图
+3. 已完成：结果页章节状态文件树
+4. 已完成：过滤导出与稳定自动刷新
+5. 已完成：结果页布局稳定化
+6. 已完成：文档与验证收口
+
+### Validation
+
+- `python -m unittest server.tests.test_runs_api -v`
+- `node --experimental-strip-types --test web/tests/artifacts-api.test.ts web/tests/results-view.test.ts web/tests/results-refresh.test.ts web/tests/results-layout.test.ts web/tests/run-workbench-layout.test.ts web/tests/run-workbench-chapter-progress.test.ts web/tests/results-workbench-state.test.ts`
+- `python -m unittest server.tests.test_health server.tests.test_course_drafts_api server.tests.test_templates_api server.tests.test_runs_api server.tests.test_artifacts_api -v`
+- `npm run lint`
+- `npm run build`
+
+## 2026-03-27 Runtime Concurrency / Retry / Export
+
+- Status: completed
+- Goal: 为非全局章节主流程引入多章节并发、provider 级限流、临时错误自动恢复，以及严格口径的章节级导出合同，为后续 UI 并发态展示提供稳定 backend/API 基线。
+
+### Scope
+
+- 引入 provider policy registry 与可覆盖默认值
+- 将章节执行从课程级串行主循环中拆出，支持单 run 多章节并发
+- 增加调用级 transient retry 与 run 级自动 `resume`
+- 扩展 `runtime_state.json`、run API、artifact export 合同
+- 同步 runbook、workstream 与 `processagent/AGENTS.md`
+
+### Execution Batches
+
+1. 已完成：provider policy registry 与配置来源优先级
+2. 已完成：章节执行抽象与 checkpoint 安全边界
+3. 已完成：双层并发控制（单 run + provider 全局）
+4. 已完成：调用级 retry 与追责日志
+5. 已完成：run 级自动 `resume` 与章节级状态合同
+6. 已完成：严格口径章节导出与最终产物过滤
+7. 已完成：文档、规则与验证收口
+
+### Validation
+
+- `python -m unittest tests.test_provider_policy tests.test_retry_policy tests.test_pipeline tests.test_cli -v`
+- `python -m unittest server.tests.test_runs_api server.tests.test_artifacts_api -v`
+- `python -m unittest discover -s tests -v`
+- `npm run lint`
+- `npm run build`
+
 ## 2026-03-25 GUI Config / Runflow Refinement
 
 - Status: completed

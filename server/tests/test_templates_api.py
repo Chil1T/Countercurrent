@@ -95,6 +95,48 @@ class TemplateApiTests(unittest.TestCase):
         self.assertEqual(get_response.status_code, 200)
         self.assertEqual(get_response.json()["providers"]["anthropic"]["complex_model"], "claude-sonnet-4-20250514")
 
+    def test_gui_runtime_config_rejects_invalid_provider_policy_values(self) -> None:
+        invalid_payloads = (
+            {
+                "provider_policies": {
+                    "openai": {
+                        "max_call_attempts": 0,
+                    }
+                }
+            },
+            {
+                "provider_policies": {
+                    "openai": {
+                        "max_call_attempts": True,
+                    }
+                }
+            },
+            {
+                "provider_policies": {
+                    "openai": {
+                        "max_call_attempts": "2",
+                    }
+                }
+            },
+        )
+
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload):
+                response = self.client.put(
+                    "/gui-runtime-config",
+                    json={
+                        "default_provider": "openai",
+                        "providers": {
+                            "openai": {},
+                            "openai_compatible": {},
+                            "anthropic": {},
+                        },
+                        **payload,
+                    },
+                )
+
+                self.assertEqual(response.status_code, 422)
+
     def test_save_course_draft_config_persists_runtime_overrides(self) -> None:
         draft_id = self.client.post(
             "/course-drafts",

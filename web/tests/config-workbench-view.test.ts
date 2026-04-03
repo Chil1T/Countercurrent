@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   getConfigWorkbenchCopy,
   getConfigWorkbenchLayout,
-} from "../lib/config-workbench-view";
+} from "../lib/config-workbench-view.ts";
 
 test("config workbench uses the localized review copy", () => {
   const copy = getConfigWorkbenchCopy();
@@ -16,12 +16,19 @@ test("config workbench uses the localized review copy", () => {
   );
 });
 
+test("config workbench exposes english copy through the locale dictionary", () => {
+  const copy = getConfigWorkbenchCopy("en");
+
+  assert.equal(copy.reviewEnabledLabel, "Enable Review");
+  assert.equal(copy.runtimeDefaultsTitle, "AI Service Configuration");
+});
+
 test("config workbench keeps course overrides behind advanced settings by default", () => {
   const copy = getConfigWorkbenchCopy();
   const layout = getConfigWorkbenchLayout();
 
-  assert.equal(copy.advancedSettingsSummary, "高级设置");
-  assert.equal(layout.courseOverridesDefaultOpen, false);
+  assert.equal(copy.runtimeDefaultsTitle, "AI 服务配置");
+  assert.equal(layout.runtimeDefaultsDefaultOpen, false);
 });
 
 test("config workbench uses a shared two-column field layout for density and review strategy", () => {

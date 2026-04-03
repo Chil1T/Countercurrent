@@ -4,14 +4,28 @@ import json
 import re
 import shutil
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from threading import Lock, local
+from typing import Any, Callable, TypeVar
 
 from .blueprint import match_chapter_for_transcript, save_blueprint
 from .bootstrap import bootstrap_course_blueprint
+from .chapter_execution import ChapterExecutionPlanner, ChapterExecutionScheduler, ChapterWorker, RuntimeStateMutationGuard
 from .llm import LLMBackend
+from .provider_policy import (
+    ProviderExecutionPolicy,
+    ProviderPermitRegistry,
+    build_coordination_owner_payload,
+    get_builtin_provider_policy,
+    get_provider_coordination_root,
+    get_service_coordination_root,
+    release_owned_directory,
+    try_acquire_owned_directory,
+)
+from .retrying_llm import RetryingLLMBackend
 
 REQUIRED_PACK_FILES = (
     "01-精讲.md",
@@ -66,10 +80,37 @@ HOSTED_PRESSURE_STAGES = (
     "build_interview_index",
 )
 EXECUTION_STRATEGY = {
-    "chapter_loop": "serial",
+    "chapter_loop": "policy_limited_parallel",
     "writer_loop": "serial",
     "global_consolidation": "serial",
 }
+
+T = TypeVar("T")
+
+
+@contextmanager
+def _acquire_course_run_slot(*, coordination_root: Path, course_id: str):
+    lock_dir = coordination_root / course_id
+    lock_dir.parent.mkdir(parents=True, exist_ok=True)
+    owner_payload = build_coordination_owner_payload({"course_id": course_id, "kind": "course-run-lock"})
+    if not try_acquire_owned_directory(
+        lock_dir,
+        owner_payload=owner_payload,
+        preserve_legacy_owner_without_pid=True,
+    ):
+        raise RuntimeError(f"course {course_id} already has an active run")
+    try:
+        yield
+    finally:
+        release_owned_directory(lock_dir)
+
+
+def reset_pipeline_runtime_registries() -> None:
+    shutil.rmtree(_course_run_lock_root(), ignore_errors=True)
+
+
+def _course_run_lock_root() -> Path:
+    return get_service_coordination_root() / "course_run_locks"
 
 
 @dataclass
@@ -83,6 +124,8 @@ class PipelineConfig:
     backend_name: str = "heuristic"
     enable_review: bool = False
     run_global_consolidation: bool = False
+    run_id: str | None = None
+    provider_policy: ProviderExecutionPolicy | None = None
 
 
 class IngestAgent:
@@ -141,6 +184,94 @@ class IngestAgent:
 
 
 @dataclass
+class PipelineChapterExecutionRuntime:
+    runner: "PipelineRunner"
+
+    @property
+    def course_dir(self) -> Path:
+        return self.runner.course_dir
+
+    @property
+    def review_enabled(self) -> bool:
+        return self.runner.config.enable_review
+
+    @property
+    def writer_names(self) -> tuple[str, ...]:
+        return self.runner._active_writer_names()
+
+    @property
+    def writer_file_map(self) -> dict[str, str]:
+        return self.runner.pack_writer_files
+
+    def slim_course_blueprint(self) -> dict[str, Any]:
+        return self.runner._slim_course_blueprint()
+
+    def ingest_transcript(self, chapter_id: str, transcript_text: str) -> dict[str, Any]:
+        return self.runner.ingest_agent.run(chapter_id=chapter_id, transcript_text=transcript_text)
+
+    def run_json_stage(self, stage_name: str, payload: dict[str, Any], *, scope: str) -> dict[str, Any]:
+        return self.runner._run_agent(stage_name, payload, scope=scope)
+
+    def run_text_stage(self, stage_name: str, payload: dict[str, Any], *, scope: str) -> str:
+        return self.runner._run_text_agent(stage_name, payload, scope=scope)
+
+    def write_json(self, path: Path, data: dict[str, Any]) -> None:
+        self.runner._write_json(path, data)
+
+    def sync_run_snapshot(self, *, chapter_id: str, notebooklm_dir: Path) -> None:
+        self.runner.sync_run_snapshot(chapter_id=chapter_id, notebooklm_dir=notebooklm_dir)
+
+    def build_pack_payload(
+        self,
+        *,
+        chapter_blueprint: dict[str, Any],
+        normalized: dict[str, Any],
+        topic_map: dict[str, Any],
+        augmentation: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self.runner._build_pack_payload(
+            chapter_blueprint=chapter_blueprint,
+            normalized=normalized,
+            topic_map=topic_map,
+            augmentation=augmentation,
+        )
+
+    def build_writer_payload(
+        self,
+        *,
+        chapter_blueprint: dict[str, Any],
+        normalized: dict[str, Any],
+        topic_map: dict[str, Any],
+        augmentation: dict[str, Any],
+        pack_plan: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self.runner._build_writer_payload(
+            chapter_blueprint=chapter_blueprint,
+            normalized=normalized,
+            topic_map=topic_map,
+            augmentation=augmentation,
+            pack_plan=pack_plan,
+        )
+
+    def build_review_payload(
+        self,
+        *,
+        chapter_blueprint: dict[str, Any],
+        normalized: dict[str, Any],
+        topic_map: dict[str, Any],
+        augmentation: dict[str, Any],
+        pack: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self.runner._build_review_payload(
+            chapter_blueprint=chapter_blueprint,
+            normalized=normalized,
+            topic_map=topic_map,
+            augmentation=augmentation,
+            pack=pack,
+        )
+
+
+@dataclass
 class PipelineRunner:
     config: PipelineConfig
     llm_backend: LLMBackend | None = None
@@ -150,6 +281,12 @@ class PipelineRunner:
             self.llm_backend = HeuristicLLMBackend()
         self.prompt_dir = Path(__file__).with_name("prompts")
         self.ingest_agent = IngestAgent()
+        self.pack_writer_files = PACK_WRITER_FILES
+        self.provider_policy = self.config.provider_policy or get_builtin_provider_policy(self.config.backend_name)
+        if not isinstance(self.llm_backend, RetryingLLMBackend):
+            self.llm_backend = RetryingLLMBackend(backend=self.llm_backend, provider_policy=self.provider_policy)
+        self.service_coordination_root = get_service_coordination_root()
+        self.provider_permit_registry = ProviderPermitRegistry(root_dir=get_provider_coordination_root())
         self.course_blueprint = self.config.course_blueprint or bootstrap_course_blueprint(
             input_dir=self.config.input_dir,
             book_title=self.config.input_dir.name or "未命名课程",
@@ -157,167 +294,66 @@ class PipelineRunner:
             llm_backend=None,
         )
         self.course_dir = self.config.output_dir / "courses" / self.course_blueprint["course_id"]
+        self.results_snapshot_root = self.config.output_dir / "_gui" / "results-snapshots"
         self.runtime_state_path = self.course_dir / "runtime_state.json"
         self.blueprint_path = self.course_dir / "course_blueprint.json"
         self.llm_call_log_path = self.course_dir / "runtime" / "llm_calls.jsonl"
         self.runtime_state = self._load_runtime_state()
+        self.runtime_state_guard = RuntimeStateMutationGuard(
+            runtime_state_path=self.runtime_state_path,
+            runtime_state=self.runtime_state,
+            blueprint_hash=self.course_blueprint["blueprint_hash"],
+            now_iso_factory=self._now_iso,
+            pipeline_signature=PIPELINE_SIGNATURE,
+        )
+        self._pending_step_retry_metadata: dict[tuple[str, str], dict[str, Any]] = {}
+        self._pending_step_retry_metadata_lock = Lock()
+        self._install_step_retry_metadata_bridge()
+        self.chapter_execution_runtime = PipelineChapterExecutionRuntime(self)
+        self.chapter_planner = ChapterExecutionPlanner(
+            runtime=self.chapter_execution_runtime,
+            runtime_state_guard=self.runtime_state_guard,
+        )
+        self.chapter_worker = ChapterWorker(
+            runtime=self.chapter_execution_runtime,
+            runtime_state_guard=self.runtime_state_guard,
+        )
+        self.chapter_scheduler = ChapterExecutionScheduler(
+            worker=self.chapter_worker,
+            max_concurrent_chapters=self.provider_policy.max_concurrent_per_run,
+        )
 
     def run(self) -> None:
-        if self.config.clean_output and self.course_dir.exists():
-            shutil.rmtree(self.course_dir)
-            self.runtime_state = self._fresh_runtime_state()
+        with _acquire_course_run_slot(
+            coordination_root=self.service_coordination_root / "course_run_locks",
+            course_id=self.course_blueprint["course_id"],
+        ):
+            if self.config.clean_output and self.course_dir.exists():
+                shutil.rmtree(self.course_dir)
+                self.runtime_state.clear()
+                self.runtime_state.update(self._fresh_runtime_state())
 
-        self.course_dir.mkdir(parents=True, exist_ok=True)
-        save_blueprint(self.blueprint_path, self.course_blueprint)
-        self._persist_runtime_state()
-
-        if self.config.run_global_consolidation:
-            self._run_global_consolidation()
+            self.course_dir.mkdir(parents=True, exist_ok=True)
+            save_blueprint(self.blueprint_path, self.course_blueprint)
             self._persist_runtime_state()
-            return
 
-        for transcript_file in sorted(self.config.input_dir.glob("*.md")):
-            chapter_blueprint = match_chapter_for_transcript(self.course_blueprint, transcript_file.stem)
-            chapter_output_id = chapter_blueprint["chapter_id"]
-            chapter_dir = self.course_dir / "chapters" / chapter_output_id
-            intermediate_dir = chapter_dir / "intermediate"
-            notebooklm_dir = chapter_dir / "notebooklm"
-            intermediate_dir.mkdir(parents=True, exist_ok=True)
-            notebooklm_dir.mkdir(parents=True, exist_ok=True)
-            chapter_changed = False
+            if self.config.run_global_consolidation:
+                self._run_global_consolidation()
+                self._persist_runtime_state()
+                return
 
-            normalized = self._load_step_json(
-                chapter_id=chapter_output_id,
-                step_name="ingest",
-                path=intermediate_dir / "normalized_transcript.json",
-                require_blueprint=False,
-            )
-            if normalized is None:
-                normalized = self.ingest_agent.run(
-                    chapter_id=chapter_output_id,
-                    transcript_text=transcript_file.read_text(encoding="utf-8"),
-                )
-                self._write_json(intermediate_dir / "normalized_transcript.json", normalized)
-                self._mark_step_complete(chapter_output_id, "ingest", require_blueprint=False)
-                chapter_changed = True
-
-            topic_map = self._load_step_json(
-                chapter_id=chapter_output_id,
-                step_name="curriculum_anchor",
-                path=intermediate_dir / "topic_anchor_map.json",
-            )
-            if topic_map is None:
-                topic_map = self._run_agent(
-                    "curriculum_anchor",
-                    {
-                        "course_blueprint": self._slim_course_blueprint(),
-                        "chapter_blueprint": chapter_blueprint,
-                        "normalized_transcript": normalized,
-                    },
-                    scope=chapter_output_id,
-                )
-                self._write_json(intermediate_dir / "topic_anchor_map.json", topic_map)
-                self._mark_step_complete(chapter_output_id, "curriculum_anchor")
-                chapter_changed = True
-
-            augmentation = self._load_step_json(
-                chapter_id=chapter_output_id,
-                step_name="gap_fill",
-                path=intermediate_dir / "augmentation_candidates.json",
-            )
-            if augmentation is None:
-                augmentation = self._run_agent(
-                    "gap_fill",
-                    {
-                        "course_blueprint": self._slim_course_blueprint(),
-                        "chapter_blueprint": chapter_blueprint,
-                        "normalized_transcript": normalized,
-                        "topic_anchor_map": topic_map,
-                    },
-                    scope=chapter_output_id,
-                )
-                self._write_json(intermediate_dir / "augmentation_candidates.json", augmentation)
-                self._mark_step_complete(chapter_output_id, "gap_fill")
-                chapter_changed = True
-
-            pack_payload = self._build_pack_payload(
-                chapter_blueprint=chapter_blueprint,
-                normalized=normalized,
-                topic_map=topic_map,
-                augmentation=augmentation,
-            )
-            pack_plan_path = intermediate_dir / "pack_plan.json"
-            pack_plan = None if chapter_changed else self._load_step_json(
-                chapter_id=chapter_output_id,
-                step_name="pack_plan",
-                path=pack_plan_path,
-            )
-            if pack_plan is None:
-                pack_plan = self._run_agent(
-                    "pack_plan",
-                    pack_payload,
-                    scope=chapter_output_id,
-                )
-                self._write_json(pack_plan_path, pack_plan)
-                self._mark_step_complete(chapter_output_id, "pack_plan")
-                chapter_changed = True
-
-            pack_files: dict[str, str] = {}
-            for writer_name in self._active_writer_names():
-                file_name = PACK_WRITER_FILES[writer_name]
-                output_path = notebooklm_dir / file_name
-                content = None if chapter_changed else self._load_step_text(
-                    chapter_id=chapter_output_id,
-                    step_name=writer_name,
-                    path=output_path,
-                )
-                if content is None:
-                    content = self._run_text_agent(
-                        writer_name,
-                        self._build_writer_payload(
-                            chapter_blueprint=chapter_blueprint,
-                            normalized=normalized,
-                            topic_map=topic_map,
-                            augmentation=augmentation,
-                            pack_plan=pack_plan,
-                        ),
-                        scope=chapter_output_id,
+            plans: list[Any] = []
+            for transcript_file in sorted(self.config.input_dir.glob("*.md")):
+                chapter_blueprint = match_chapter_for_transcript(self.course_blueprint, transcript_file.stem)
+                plans.append(
+                    self.chapter_planner.plan(
+                        transcript_file=transcript_file,
+                        chapter_blueprint=chapter_blueprint,
                     )
-                    output_path.write_text(content, encoding="utf-8")
-                    self._mark_step_complete(chapter_output_id, writer_name)
-                    chapter_changed = True
-                pack_files[file_name] = content
+                )
+            self.chapter_scheduler.run(tuple(plans))
 
-            pack = {"files": pack_files}
-
-            review_path = chapter_dir / "review_report.json"
-            if self.config.enable_review:
-                review = self._load_step_json(
-                    chapter_id=chapter_output_id,
-                    step_name="review",
-                    path=review_path,
-                ) if not chapter_changed else None
-                if review is None:
-                    review = self._run_agent(
-                        "review",
-                        self._build_review_payload(
-                            chapter_blueprint=chapter_blueprint,
-                            normalized=normalized,
-                            topic_map=topic_map,
-                            augmentation=augmentation,
-                            pack=pack,
-                        ),
-                        scope=chapter_output_id,
-                    )
-                    self._write_json(review_path, review)
-                    self._mark_step_complete(chapter_output_id, "review")
-                    chapter_changed = True
-            else:
-                if review_path.exists():
-                    review_path.unlink()
-                self._clear_step_record(chapter_output_id, "review")
-
-        self._persist_runtime_state()
+            self._persist_runtime_state()
 
     def _run_global_consolidation(self) -> None:
         active_chapters = self._collect_active_chapters()
@@ -402,6 +438,22 @@ class PipelineRunner:
             "blueprint_hash": self.course_blueprint["blueprint_hash"],
         }
 
+    def _chapter_snapshot_dir(self, chapter_id: str) -> Path | None:
+        run_id = self.config.run_id
+        if not run_id or self.config.run_global_consolidation:
+            return None
+        return self.results_snapshot_root / self.course_blueprint["course_id"] / run_id / "chapters" / chapter_id / "notebooklm"
+
+    def sync_run_snapshot(self, *, chapter_id: str, notebooklm_dir: Path) -> None:
+        snapshot_dir = self._chapter_snapshot_dir(chapter_id)
+        if snapshot_dir is None:
+            return
+        if snapshot_dir.exists():
+            shutil.rmtree(snapshot_dir)
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        for path in sorted(notebooklm_dir.glob("*.md")):
+            shutil.copy2(path, snapshot_dir / path.name)
+
     def _run_agent(self, agent_name: str, payload: dict[str, Any], *, scope: str) -> dict[str, Any]:
         prompt = self._load_prompt(agent_name)
         model_override = self._resolve_stage_model(agent_name)
@@ -409,11 +461,14 @@ class PipelineRunner:
         response: dict[str, Any] | None = None
         error: Exception | None = None
         try:
-            response = self.llm_backend.generate_json(
-                agent_name=agent_name,
-                prompt=prompt,
-                payload=payload,
-                model_override=model_override,
+            response = self._run_hosted_stage(
+                agent_name,
+                lambda: self.llm_backend.generate_json(
+                    agent_name=agent_name,
+                    prompt=prompt,
+                    payload=payload,
+                    model_override=model_override,
+                ),
             )
             return response
         except Exception as exc:
@@ -439,11 +494,14 @@ class PipelineRunner:
         error: Exception | None = None
         started_at = time.perf_counter()
         try:
-            response = self.llm_backend.generate_text(
-                agent_name=agent_name,
-                prompt=prompt,
-                payload=payload,
-                model_override=model_override,
+            response = self._run_hosted_stage(
+                agent_name,
+                lambda: self.llm_backend.generate_text(
+                    agent_name=agent_name,
+                    prompt=prompt,
+                    payload=payload,
+                    model_override=model_override,
+                ),
             )
             return response
         except Exception as exc:
@@ -599,14 +657,12 @@ class PipelineRunner:
         path: Path,
         require_blueprint: bool = True,
     ) -> dict[str, Any] | None:
-        if not self._step_is_valid(
-            scope=chapter_id,
+        return self.runtime_state_guard.load_step_json(
+            chapter_id=chapter_id,
             step_name=step_name,
-            required_paths=(path,),
+            path=path,
             require_blueprint=require_blueprint,
-        ):
-            return None
-        return json.loads(path.read_text(encoding="utf-8"))
+        )
 
     def _load_step_text(
         self,
@@ -616,14 +672,12 @@ class PipelineRunner:
         path: Path,
         require_blueprint: bool = True,
     ) -> str | None:
-        if not self._step_is_valid(
-            scope=chapter_id,
+        return self.runtime_state_guard.load_step_text(
+            chapter_id=chapter_id,
             step_name=step_name,
-            required_paths=(path,),
+            path=path,
             require_blueprint=require_blueprint,
-        ):
-            return None
-        return path.read_text(encoding="utf-8")
+        )
 
     def _load_step_pack(self, *, chapter_id: str, step_name: str, notebooklm_dir: Path) -> dict[str, Any] | None:
         required_paths = tuple(notebooklm_dir / name for name in REQUIRED_PACK_FILES)
@@ -645,44 +699,25 @@ class PipelineRunner:
         required_paths: tuple[Path, ...],
         require_blueprint: bool,
     ) -> bool:
-        record = self._get_step_record(scope, step_name)
-        if record is None:
-            return False
-        if not all(path.exists() for path in required_paths):
-            return False
-        if record.get("pipeline_signature") != PIPELINE_SIGNATURE:
-            return False
-        if require_blueprint and record.get("blueprint_hash") != self.course_blueprint["blueprint_hash"]:
-            return False
-        return record.get("status") == "completed"
+        return self.runtime_state_guard.step_is_valid(
+            scope=scope,
+            step_name=step_name,
+            required_paths=required_paths,
+            require_blueprint=require_blueprint,
+        )
 
     def _get_step_record(self, scope: str, step_name: str) -> dict[str, Any] | None:
-        if scope == "global":
-            return self.runtime_state.get("global", {}).get(step_name)
-        return self.runtime_state.get("chapters", {}).get(scope, {}).get("steps", {}).get(step_name)
+        return self.runtime_state_guard.get_step_record(scope, step_name)
 
     def _clear_step_record(self, scope: str, step_name: str) -> None:
-        if scope == "global":
-            self.runtime_state.get("global", {}).pop(step_name, None)
-        else:
-            chapter_state = self.runtime_state.get("chapters", {}).get(scope, {})
-            chapter_state.get("steps", {}).pop(step_name, None)
-        self._persist_runtime_state()
+        self.runtime_state_guard.clear_step_record(scope, step_name)
 
     def _mark_step_complete(self, scope: str, step_name: str, require_blueprint: bool = True) -> None:
-        payload = {
-            "status": "completed",
-            "updated_at": self._now_iso(),
-            "blueprint_hash": self.course_blueprint["blueprint_hash"] if require_blueprint else None,
-            "pipeline_signature": PIPELINE_SIGNATURE,
-        }
-        if scope == "global":
-            self.runtime_state.setdefault("global", {})[step_name] = payload
-        else:
-            chapter_state = self.runtime_state.setdefault("chapters", {}).setdefault(scope, {"steps": {}})
-            chapter_state.setdefault("steps", {})[step_name] = payload
-        self.runtime_state["last_error"] = None
-        self._persist_runtime_state()
+        self.runtime_state_guard.mark_step_complete(
+            scope,
+            step_name,
+            require_blueprint=require_blueprint,
+        )
 
     def _current_run_identity(self) -> dict[str, Any]:
         return {
@@ -733,11 +768,7 @@ class PipelineRunner:
         }
 
     def _persist_runtime_state(self) -> None:
-        self.runtime_state_path.parent.mkdir(parents=True, exist_ok=True)
-        self.runtime_state_path.write_text(
-            json.dumps(self.runtime_state, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        self.runtime_state_guard.persist()
 
     def _record_llm_call(
         self,
@@ -757,41 +788,179 @@ class PipelineRunner:
         if callable(consume):
             metadata = consume()
 
-        duration_ms = int((time.perf_counter() - started_at) * 1000)
-        provider = self.config.backend_name
-        model = model_override or self.config.model or None
-        input_tokens = self._estimate_token_count(f"{prompt}\n{json.dumps(payload, ensure_ascii=False)}")
-        output_tokens = self._estimate_token_count(response) if response is not None else None
-        status = "error" if error else "completed"
-        error_text = str(error) if error else None
+        attempt_entries = self._build_llm_attempt_entries(
+            metadata=metadata,
+            prompt=prompt,
+            payload=payload,
+            response=response,
+            model_override=model_override,
+            started_at=started_at,
+            error=error,
+        )
+        step_metadata = self._build_step_retry_metadata(attempt_entries)
+        if error is None:
+            self._cache_pending_step_retry_metadata(scope, stage, step_metadata)
+        else:
+            self._write_failed_step_retry_metadata(scope, stage, step_metadata)
 
-        if metadata:
-            provider = metadata.get("provider") or provider
-            model = metadata.get("model") or model
-            input_tokens = metadata.get("input_tokens") or input_tokens
-            output_tokens = metadata.get("output_tokens") or output_tokens
-            duration_ms = metadata.get("duration_ms") or duration_ms
-            status = metadata.get("status") or status
-            error_text = metadata.get("error") or error_text
-
-        entry = {
-            "course_id": self.course_blueprint["course_id"],
-            "scope": scope,
-            "stage": stage,
-            "provider": provider,
-            "model": model,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "duration_ms": duration_ms,
-            "status": status,
-            "error": error_text,
-            "response_type": response_type,
-            "logged_at": self._now_iso(),
-            "pipeline_signature": PIPELINE_SIGNATURE,
-        }
         self.llm_call_log_path.parent.mkdir(parents=True, exist_ok=True)
         with self.llm_call_log_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            for entry in attempt_entries:
+                handle.write(
+                    json.dumps(
+                        {
+                            "course_id": self.course_blueprint["course_id"],
+                            "scope": scope,
+                            "stage": stage,
+                            "provider": entry["provider"],
+                            "model": entry["model"],
+                            "input_tokens": entry["input_tokens"],
+                            "output_tokens": entry["output_tokens"],
+                            "duration_ms": entry["duration_ms"],
+                            "status": entry["status"],
+                            "error": entry["error"],
+                            "error_kind": entry["error_kind"],
+                            "attempt": entry["attempt"],
+                            "attempt_count": len(attempt_entries),
+                            "retry_reason": entry["retry_reason"],
+                            "will_retry": entry["will_retry"],
+                            "response_type": response_type,
+                            "logged_at": self._now_iso(),
+                            "pipeline_signature": PIPELINE_SIGNATURE,
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+
+    def _install_step_retry_metadata_bridge(self) -> None:
+        def mark_step_complete(scope: str, step_name: str, require_blueprint: bool = True) -> None:
+            payload = {
+                "status": "completed",
+                "updated_at": self._now_iso(),
+                "blueprint_hash": self.course_blueprint["blueprint_hash"] if require_blueprint else None,
+                "pipeline_signature": PIPELINE_SIGNATURE,
+            }
+            retry_metadata = self._consume_pending_step_retry_metadata(scope, step_name)
+            if retry_metadata:
+                payload.update(retry_metadata)
+
+            def mutate(state: dict[str, Any]) -> None:
+                if scope == "global":
+                    container = state.setdefault("global", {})
+                else:
+                    chapter_state = state.setdefault("chapters", {}).setdefault(scope, {"steps": {}})
+                    container = chapter_state.setdefault("steps", {})
+                existing = container.get(step_name, {})
+                container[step_name] = {**existing, **payload}
+                self.runtime_state_guard._clear_last_error_for_step(state, scope, step_name)
+
+            self.runtime_state_guard._mutate(mutate)
+
+        self.runtime_state_guard.mark_step_complete = mark_step_complete
+
+    def _cache_pending_step_retry_metadata(self, scope: str, step_name: str, metadata: dict[str, Any]) -> None:
+        with self._pending_step_retry_metadata_lock:
+            self._pending_step_retry_metadata[(scope, step_name)] = dict(metadata)
+
+    def _consume_pending_step_retry_metadata(self, scope: str, step_name: str) -> dict[str, Any] | None:
+        with self._pending_step_retry_metadata_lock:
+            return self._pending_step_retry_metadata.pop((scope, step_name), None)
+
+    def _write_failed_step_retry_metadata(self, scope: str, step_name: str, metadata: dict[str, Any]) -> None:
+        payload = {
+            "status": "failed",
+            "updated_at": self._now_iso(),
+            "blueprint_hash": self.course_blueprint["blueprint_hash"],
+            "pipeline_signature": PIPELINE_SIGNATURE,
+            **metadata,
+        }
+
+        def mutate(state: dict[str, Any]) -> None:
+            if scope == "global":
+                container = state.setdefault("global", {})
+            else:
+                chapter_state = state.setdefault("chapters", {}).setdefault(scope, {"steps": {}})
+                container = chapter_state.setdefault("steps", {})
+            existing = container.get(step_name, {})
+            container[step_name] = {**existing, **payload}
+            state["last_error"] = {
+                "scope": scope,
+                "step": step_name,
+                "last_error_kind": metadata.get("last_error_kind"),
+            }
+
+        self.runtime_state_guard._mutate(mutate)
+
+    def _build_llm_attempt_entries(
+        self,
+        *,
+        metadata: dict[str, Any] | None,
+        prompt: str,
+        payload: dict[str, Any],
+        response: dict[str, Any] | str | None,
+        model_override: str | None,
+        started_at: float,
+        error: Exception | None,
+    ) -> list[dict[str, Any]]:
+        attempts = metadata.get("attempts") if metadata else None
+        if not attempts:
+            attempts = [
+                {
+                    "attempt": 1,
+                    "provider": (metadata or {}).get("provider") or self.config.backend_name,
+                    "model": (metadata or {}).get("model") or model_override or self.config.model or None,
+                    "input_tokens": (metadata or {}).get("input_tokens")
+                    or self._estimate_token_count(f"{prompt}\n{json.dumps(payload, ensure_ascii=False)}"),
+                    "output_tokens": (metadata or {}).get("output_tokens")
+                    or (self._estimate_token_count(response) if response is not None else None),
+                    "duration_ms": (metadata or {}).get("duration_ms") or int((time.perf_counter() - started_at) * 1000),
+                    "status": (metadata or {}).get("status") or ("error" if error else "completed"),
+                    "error": (metadata or {}).get("error") or (str(error) if error else None),
+                    "error_kind": (metadata or {}).get("last_error_kind"),
+                    "retry_reason": None,
+                    "will_retry": False,
+                }
+            ]
+        normalized: list[dict[str, Any]] = []
+        for index, item in enumerate(attempts, start=1):
+            normalized.append(
+                {
+                    "attempt": item.get("attempt", index),
+                    "provider": item.get("provider") or self.config.backend_name,
+                    "model": item.get("model") or model_override or self.config.model or None,
+                    "input_tokens": item.get("input_tokens")
+                    or self._estimate_token_count(f"{prompt}\n{json.dumps(payload, ensure_ascii=False)}"),
+                    "output_tokens": item.get("output_tokens"),
+                    "duration_ms": item.get("duration_ms") or 0,
+                    "status": item.get("status") or ("error" if error else "completed"),
+                    "error": item.get("error"),
+                    "error_kind": item.get("error_kind"),
+                    "retry_reason": item.get("retry_reason"),
+                    "will_retry": bool(item.get("will_retry", False)),
+                }
+            )
+        return normalized
+
+    def _build_step_retry_metadata(self, attempt_entries: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "attempt_count": len(attempt_entries),
+            "last_error_kind": next(
+                (entry["error_kind"] for entry in reversed(attempt_entries) if entry.get("error_kind")),
+                None,
+            ),
+            "retry_history": [
+                {
+                    "attempt": entry["attempt"],
+                    "status": entry["status"],
+                    "error": entry["error"],
+                    "error_kind": entry["error_kind"],
+                    "retry_reason": entry["retry_reason"],
+                    "will_retry": entry["will_retry"],
+                }
+                for entry in attempt_entries
+            ],
+        }
 
     def _estimate_token_count(self, value: dict[str, Any] | str) -> int:
         text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
@@ -810,10 +979,16 @@ class PipelineRunner:
         profile = self._resolve_writer_profile()
         return WRITER_STAGE_SETS.get(profile, WRITER_STAGE_SETS["standard_knowledge_pack"])
 
+    def _run_hosted_stage(self, agent_name: str, operation: Callable[[], T]) -> T:
+        if agent_name not in HOSTED_PRESSURE_STAGES:
+            return operation()
+        with self.provider_permit_registry.acquire(self.provider_policy):
+            return operation()
+
 
 class HeuristicLLMBackend:
     def __init__(self) -> None:
-        self._last_call_metadata: dict[str, Any] | None = None
+        self._call_metadata = local()
 
     def generate_json(
         self,
@@ -867,12 +1042,12 @@ class HeuristicLLMBackend:
         raise KeyError(f"Unsupported text agent: {agent_name}")
 
     def consume_last_call_metadata(self) -> dict[str, Any] | None:
-        metadata = self._last_call_metadata
-        self._last_call_metadata = None
+        metadata = getattr(self._call_metadata, "value", None)
+        self._call_metadata.value = None
         return metadata
 
     def _remember_call(self, payload: dict[str, Any], response: dict[str, Any] | str, model_override: str | None) -> None:
-        self._last_call_metadata = {
+        self._call_metadata.value = {
             "provider": "heuristic",
             "model": model_override,
             "input_tokens": max(1, len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) // 4),

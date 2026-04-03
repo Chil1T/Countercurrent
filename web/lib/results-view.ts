@@ -1,4 +1,7 @@
 import type { ArtifactNode } from "@/lib/api/artifacts";
+import type { ResultsSnapshot } from "@/lib/api/artifacts";
+
+type Locale = "zh-CN" | "en";
 
 type ArtifactTreeFileNode = {
   key: string;
@@ -18,6 +21,34 @@ export type ArtifactTreeSection = {
   key: "chapter" | "global" | "runtime";
   label: string;
   children: ArtifactTreeNode[];
+};
+
+export type ResultsTreeFileNode = {
+  key: string;
+  label: string;
+  path: string;
+  sourceCourseId: string;
+  runId: string;
+};
+
+export type ResultsTreeFolderNode = {
+  key: string;
+  label: string;
+  children: ResultsTreeNode[];
+};
+
+export type ResultsTreeNode = ResultsTreeFileNode | ResultsTreeFolderNode;
+
+export type ResultsTreeSection = {
+  key: "historical-courses" | "current-course";
+  label: string;
+  children: ResultsTreeNode[];
+};
+
+export type ResultsSnapshotSelectionInput = {
+  sourceCourseId: string;
+  runId: string;
+  path: string;
 };
 
 function getArtifactGroupKey(path: string): "chapter" | "intermediate" | "global" | "review" | "runtime" {
@@ -66,6 +97,127 @@ export function isArtifactTreeLoading(runStatus: string | null | undefined): boo
   }
 
   return !new Set(["completed", "failed", "cleaned"]).has(runStatus);
+}
+
+export function buildResultsSnapshotSelection(input: ResultsSnapshotSelectionInput): string {
+  return `${input.sourceCourseId}::${input.runId}::${input.path}`;
+}
+
+export function parseResultsSnapshotSelection(selection: string): ResultsSnapshotSelectionInput | null {
+  const [sourceCourseId, runId, ...pathParts] = selection.split("::");
+  const path = pathParts.join("::");
+  if (!sourceCourseId || !runId || !path) {
+    return null;
+  }
+  return { sourceCourseId, runId, path };
+}
+
+export function getResultsTreeSelectionAncestors(selection: string): string[] {
+  const parsed = parseResultsSnapshotSelection(selection);
+  if (!parsed) {
+    return [];
+  }
+  const chapterId = parsed.path.split("/")[1] ?? "chapter";
+  const rootKey = parsed.sourceCourseId === "__current__" ? "current-course" : parsed.sourceCourseId;
+  return [rootKey, parsed.runId, `${parsed.runId}:${chapterId}`];
+}
+
+export function findResultsTreeNodeBySelection(
+  nodes: ResultsTreeNode[] | ResultsTreeSection[],
+  selection: string,
+): ResultsTreeNode | null {
+  for (const node of nodes) {
+    if ("path" in node && node.key === selection) {
+      return node;
+    }
+    if ("children" in node) {
+      const child = findResultsTreeNodeBySelection(node.children, selection);
+      if (child) {
+        return child;
+      }
+    }
+  }
+  return null;
+}
+
+function buildRunTreeNodes(
+  sourceCourseId: string,
+  runId: string,
+  chapters: Array<{ chapter_id: string; files: Array<{ path: string; kind: string; size: number }> }>,
+  markCurrentRun: boolean,
+  locale: Locale,
+): ResultsTreeFolderNode {
+  return {
+    key: runId,
+    label: markCurrentRun
+      ? `${runId} · ${locale === "zh-CN" ? "当前 run" : "Current run"}`
+      : runId,
+    children: chapters.map((chapter) => ({
+      key: `${runId}:${chapter.chapter_id}`,
+      label: chapter.chapter_id,
+      children: chapter.files
+        .filter((file) => file.path.endsWith(".md"))
+        .map((file) => ({
+          key: buildResultsSnapshotSelection({
+            sourceCourseId,
+            runId,
+            path: file.path,
+          }),
+          label: getArtifactDisplayName(file.path),
+          path: file.path,
+          sourceCourseId,
+          runId,
+        })),
+    })),
+  };
+}
+
+export function buildResultsSnapshotTree(
+  snapshot: ResultsSnapshot,
+  currentRunId: string | null = null,
+  locale: Locale = "zh-CN",
+): ResultsTreeSection[] {
+  return [
+    {
+      key: "historical-courses",
+      label: locale === "zh-CN" ? "过去课程产物" : "Past Course Outputs",
+      children: snapshot.historical_courses.map((course) => ({
+        key: course.course_id,
+        label: course.course_id,
+        children: course.runs.map((run) =>
+          buildRunTreeNodes(course.course_id, run.run_id, run.chapters, false, locale),
+        ),
+      })),
+    },
+    {
+      key: "current-course",
+      label: locale === "zh-CN" ? "当前课程产物" : "Current Course Outputs",
+      children: snapshot.current_course_runs.map((run) =>
+        buildRunTreeNodes(
+          "__current__",
+          run.run_id,
+          run.chapters,
+          currentRunId === run.run_id,
+          locale,
+        ),
+      ),
+    },
+  ];
+}
+
+export function getArtifactTreePathAncestors(path: string): string[] {
+  if (path.startsWith("chapters/")) {
+    const segments = path.split("/");
+    const chapterId = segments[1] ?? "chapter";
+    const bucket = segments[2] === "intermediate" ? "intermediate" : "final";
+    return ["chapter", chapterId, `${chapterId}:${bucket}`];
+  }
+
+  if (path.startsWith("global/")) {
+    return ["global"];
+  }
+
+  return ["runtime"];
 }
 
 export function buildArtifactTree(nodes: ArtifactNode[]): ArtifactTreeSection[] {
@@ -147,4 +299,23 @@ export function buildArtifactTree(nodes: ArtifactNode[]): ArtifactTreeSection[] 
       children: runtimeFiles,
     },
   ];
+}
+
+export function findArtifactTreeNodeByPath(
+  nodes: ArtifactTreeNode[],
+  path: string,
+): ArtifactTreeNode | null {
+  for (const node of nodes) {
+    if ("path" in node && node.path === path) {
+      return node;
+    }
+    if ("children" in node) {
+      const child = findArtifactTreeNodeByPath(node.children, path);
+      if (child) {
+        return child;
+      }
+    }
+  }
+
+  return null;
 }

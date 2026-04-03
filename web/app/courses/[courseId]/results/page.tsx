@@ -1,6 +1,4 @@
-import { ResultsWorkbench } from "@/components/results/results-workbench";
-import { AppShell } from "@/components/app-shell";
-import { buildAppShellState } from "@/lib/app-shell-state";
+import { StitchV4ResultsPage } from "@/components/stitch-v4/results-page";
 
 export default async function ResultsPage({
   params,
@@ -11,26 +9,15 @@ export default async function ResultsPage({
 }) {
   const { courseId } = await params;
   const resolvedSearchParams = await searchParams;
-  const shellSearchParams = new URLSearchParams();
-  if (resolvedSearchParams.draftId) {
-    shellSearchParams.set("draftId", resolvedSearchParams.draftId);
-  }
-  if (resolvedSearchParams.runId) {
-    shellSearchParams.set("runId", resolvedSearchParams.runId);
-  }
-
   return (
-    <AppShell
-      eyebrow="Step 4"
-      title="结果页"
-      shellState={buildAppShellState(`/courses/${courseId}/results`, shellSearchParams)}
-      contextIds={{
+    <StitchV4ResultsPage
+      courseId={courseId}
+      runId={resolvedSearchParams.runId ?? null}
+      context={{
         draftId: resolvedSearchParams.draftId ?? null,
         runId: resolvedSearchParams.runId ?? null,
         courseId,
       }}
-      >
-      <ResultsWorkbench courseId={courseId} runId={resolvedSearchParams.runId ?? null} />
-    </AppShell>
+    />
   );
 }
