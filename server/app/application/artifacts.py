@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import zipfile
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -131,7 +132,11 @@ class ArtifactService:
         current_course_runs = self._list_snapshot_runs(course_id)
         historical_courses = []
         if self._results_snapshot_root.exists():
-            for course_root in sorted(path for path in self._results_snapshot_root.iterdir() if path.is_dir()):
+            for course_root in sorted(
+                (path for path in self._results_snapshot_root.iterdir() if path.is_dir()),
+                key=lambda path: self._course_sort_key(path.name),
+                reverse=True,
+            ):
                 if course_root.name == course_id:
                     continue
                 historical_courses.append(
@@ -144,6 +149,36 @@ class ArtifactService:
             "current_course_id": course_id,
             "current_course_runs": current_course_runs,
             "historical_courses": historical_courses,
+        }
+
+    def list_global_results_snapshot(self) -> dict[str, object]:
+        if not self._results_snapshot_root.exists():
+            return {
+                "current_course_id": None,
+                "current_course_runs": [],
+                "historical_courses": [],
+            }
+
+        course_ids = [path.name for path in self._results_snapshot_root.iterdir() if path.is_dir()]
+        if not course_ids:
+            return {
+                "current_course_id": None,
+                "current_course_runs": [],
+                "historical_courses": [],
+            }
+
+        sorted_course_ids = sorted(course_ids, key=self._course_sort_key, reverse=True)
+        current_course_id = sorted_course_ids[0]
+        return {
+            "current_course_id": current_course_id,
+            "current_course_runs": self._list_snapshot_runs(current_course_id),
+            "historical_courses": [
+                {
+                    "course_id": course_id,
+                    "runs": self._list_snapshot_runs(course_id),
+                }
+                for course_id in sorted_course_ids[1:]
+            ],
         }
 
     def read_results_snapshot_content(self, *, source_course_id: str, run_id: str, relative_path: str) -> dict[str, str] | None:
@@ -186,7 +221,11 @@ class ArtifactService:
         if not course_root.exists():
             return []
         runs: list[dict[str, object]] = []
-        for run_root in sorted((path for path in course_root.iterdir() if path.is_dir()), key=lambda path: path.name, reverse=True):
+        for run_root in sorted(
+            (path for path in course_root.iterdir() if path.is_dir()),
+            key=lambda path: self._run_sort_key(course_id, path.name),
+            reverse=True,
+        ):
             chapters: list[dict[str, object]] = []
             chapters_root = run_root / "chapters"
             if chapters_root.exists():
@@ -211,6 +250,33 @@ class ArtifactService:
                         )
             runs.append({"run_id": run_root.name, "chapters": chapters})
         return runs
+
+    def _course_sort_key(self, course_id: str) -> tuple[float, str]:
+        runs = self._snapshot_course_dir(course_id)
+        if not runs.exists():
+            return (0.0, course_id)
+        run_ids = [path.name for path in runs.iterdir() if path.is_dir()]
+        if not run_ids:
+            return (0.0, course_id)
+        latest_run_id = max(run_ids, key=lambda run_id: self._run_sort_key(course_id, run_id))
+        latest_run_key = self._run_sort_key(course_id, latest_run_id)
+        return (latest_run_key[0], course_id)
+
+    def _run_sort_key(self, course_id: str, run_id: str) -> tuple[float, str]:
+        session_path = self._output_root / "_gui" / "runs" / run_id / "session.json"
+        if session_path.exists():
+            try:
+                payload = json.loads(session_path.read_text(encoding="utf-8"))
+                created_at = payload.get("created_at")
+                if isinstance(created_at, str):
+                    return (datetime.fromisoformat(created_at).timestamp(), run_id)
+            except (OSError, json.JSONDecodeError, ValueError):
+                pass
+
+        run_root = self._snapshot_run_dir(course_id, run_id)
+        if run_root.exists():
+            return (run_root.stat().st_mtime, run_id)
+        return (0.0, run_id)
 
     @staticmethod
     def _is_public_artifact(relative_path: str) -> bool:

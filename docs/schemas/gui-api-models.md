@@ -315,7 +315,12 @@
 
 ## Results Snapshot
 
-`GET /courses/{course_id}/results-snapshot` 当前返回按课程和 run 组织的最终产物快照。
+结果快照当前有两类只读入口：
+
+- `GET /results-snapshot`
+- `GET /courses/{course_id}/results-snapshot`
+
+两者都返回按课程和 run 组织的最终产物快照；前者会按最新 run 时间自动选择当前课程。
 
 ### ResultsSnapshot
 
@@ -324,6 +329,12 @@
 - `current_course_id`
 - `current_course_runs`
 - `historical_courses`
+
+语义：
+
+- `current_course_id` 可为空；当系统里还没有任何 run snapshot 时，默认结果工作台应据此渲染空的结果工作台，而不是报错
+- `GET /results-snapshot` 会把最新 run 所属课程放进 `current_course_id`
+- `GET /courses/{course_id}/results-snapshot` 会把请求的 `course_id` 放进 `current_course_id`
 
 ### ResultsSnapshotRun
 
@@ -363,6 +374,16 @@
 
 - 用于读取 snapshot 主树中的单个最终文件
 - `source_course_id` 允许读取历史课程分区中的内容
+
+`GET /results-snapshot/content` 请求参数：
+
+- `source_course_id`
+- `run_id`
+- `path`
+
+语义：
+
+- 用于默认 `/courses/results` 工作台读取历史课程或当前课程分区中的单个最终文件
 
 ## Export
 

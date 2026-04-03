@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   buildExportUrl,
+  getGlobalResultsSnapshot,
   getResultsSnapshot,
   getResultsSnapshotContent,
   getReviewSummary,
@@ -136,19 +137,20 @@ export function StitchV4ResultsPage({
   const [exportCompletedOnly, setExportCompletedOnly] = useState(false);
   const [exportFinalOnly, setExportFinalOnly] = useState(false);
   const previousRunRef = useRef<RunSession | null>(null);
+  const effectiveCourseId = courseId ?? snapshot?.current_course_id ?? routeContext.courseId ?? null;
 
   const treeSections = useMemo(
     () =>
       buildResultsSnapshotTree(
         snapshot ?? {
-          current_course_id: courseId ?? "unbound-course",
+          current_course_id: effectiveCourseId,
           current_course_runs: [],
           historical_courses: [],
         },
         runId,
         locale,
       ),
-    [courseId, locale, runId, snapshot],
+    [effectiveCourseId, locale, runId, snapshot],
   );
 
   useEffect(() => {
@@ -156,19 +158,17 @@ export function StitchV4ResultsPage({
       return;
     }
 
-    if (!courseId) {
-      return;
-    }
-
     let cancelled = false;
-    const activeCourseId = courseId;
 
     async function loadPage() {
       try {
-        const [nextSnapshot, nextSummary, nextContext, nextRun] = await Promise.all([
-          getResultsSnapshot(activeCourseId),
-          getReviewSummary(activeCourseId),
-          getCourseResultsContext(activeCourseId).catch(() => null),
+        const nextSnapshot = courseId
+          ? await getResultsSnapshot(courseId)
+          : await getGlobalResultsSnapshot();
+        const activeCourseId = courseId ?? nextSnapshot.current_course_id;
+        const [nextSummary, nextContext, nextRun] = await Promise.all([
+          activeCourseId ? getReviewSummary(activeCourseId).catch(() => null) : Promise.resolve(null),
+          activeCourseId ? getCourseResultsContext(activeCourseId).catch(() => null) : Promise.resolve(null),
           runId ? getRun(runId).catch(() => null) : Promise.resolve(null),
         ]);
         if (cancelled) {
@@ -194,14 +194,14 @@ export function StitchV4ResultsPage({
     return () => {
       cancelled = true;
     };
-  }, [courseId, locale, preview, previewSnapshot, routeContext.courseId, runId, preview?.runId, preview?.contentByPath, preview?.context, preview?.reviewSummary]);
+  }, [courseId, locale, preview, routeContext.courseId, runId]);
 
   useEffect(() => {
-    if (preview || !courseId || !runId) {
+    if (preview || !effectiveCourseId || !runId) {
       return;
     }
     let cancelled = false;
-    const activeCourseId = courseId;
+    const activeCourseId = effectiveCourseId;
     const unsubscribe = subscribeRunEvents(runId, {
       onUpdate: (nextRun) => {
         if (cancelled) {
@@ -228,10 +228,10 @@ export function StitchV4ResultsPage({
       cancelled = true;
       unsubscribe();
     };
-  }, [courseId, preview, runId]);
+  }, [effectiveCourseId, preview, runId]);
 
   useEffect(() => {
-    if (!courseId || !selectedSelection || preview) {
+    if (!effectiveCourseId || !selectedSelection || preview) {
       return;
     }
     const node = findResultsTreeNodeBySelection(treeSections, selectedSelection);
@@ -239,7 +239,7 @@ export function StitchV4ResultsPage({
       return;
     }
     let cancelled = false;
-    void getResultsSnapshotContent(courseId, {
+    void getResultsSnapshotContent(effectiveCourseId, {
       sourceCourseId: node.sourceCourseId === "__current__" ? null : node.sourceCourseId,
       runId: node.runId,
       path: node.path,
@@ -258,7 +258,7 @@ export function StitchV4ResultsPage({
     return () => {
       cancelled = true;
     };
-  }, [courseId, preview, selectedSelection, treeSections]);
+  }, [effectiveCourseId, preview, selectedSelection, treeSections]);
 
   const selectedNode = selectedSelection
     ? findResultsTreeNodeBySelection(treeSections, selectedSelection)
@@ -272,9 +272,9 @@ export function StitchV4ResultsPage({
     () => new Map((context?.latest_run?.chapter_progress ?? []).map((item) => [item.chapter_id, item.status])),
     [context?.latest_run?.chapter_progress],
   );
-  const loadingArtifacts = isPreview || !courseId ? false : isArtifactTreeLoading(context?.latest_run?.status);
-  const exportUrl = courseId
-    ? buildExportUrl(courseId, {
+  const loadingArtifacts = isPreview || !effectiveCourseId ? false : isArtifactTreeLoading(context?.latest_run?.status);
+  const exportUrl = effectiveCourseId
+    ? buildExportUrl(effectiveCourseId, {
         completedChaptersOnly: exportCompletedOnly,
         finalOutputsOnly: exportFinalOnly,
         cacheBust: `${snapshot?.current_course_runs.length ?? 0}-${reviewSummary?.report_count ?? 0}`,
@@ -282,7 +282,7 @@ export function StitchV4ResultsPage({
     : null;
   const nextContext = {
     draftId: routeContext.draftId,
-    courseId: courseId ?? routeContext.courseId,
+    courseId: effectiveCourseId,
     runId,
   };
 
@@ -440,11 +440,11 @@ export function StitchV4ResultsPage({
               </label>
             </section>
 
-            <StitchV4ContextRail
-              draftId={routeContext.draftId}
-              courseId={courseId ?? routeContext.courseId}
-              runId={runId}
-            />
+                <StitchV4ContextRail
+                  draftId={routeContext.draftId}
+                  courseId={effectiveCourseId}
+                  runId={runId}
+                />
 
             <div className="space-y-3 pb-10">
               {exportUrl ? (

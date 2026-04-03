@@ -37,7 +37,7 @@ export type ResultsSnapshotCourse = {
 };
 
 export type ResultsSnapshot = {
-  current_course_id: string;
+  current_course_id: string | null;
   current_course_runs: ResultsSnapshotRun[];
   historical_courses: ResultsSnapshotCourse[];
 };
@@ -115,8 +115,24 @@ export async function getResultsSnapshot(courseId: string): Promise<ResultsSnaps
   return (await response.json()) as ResultsSnapshot;
 }
 
+export async function getGlobalResultsSnapshot(): Promise<ResultsSnapshot> {
+  const response = await fetch(`${API_BASE_URL}/results-snapshot`, {
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load global results snapshot: ${response.status}`);
+  }
+  return (await response.json()) as ResultsSnapshot;
+}
+
 export type ResultsSnapshotContentRequest = {
   sourceCourseId?: string | null;
+  runId: string;
+  path: string;
+};
+
+export type GlobalResultsSnapshotContentRequest = {
+  sourceCourseId: string;
   runId: string;
   path: string;
 };
@@ -134,6 +150,16 @@ export function buildResultsSnapshotContentUrl(
   return `${API_BASE_URL}/courses/${courseId}/results-snapshot/content?${params.toString()}`;
 }
 
+export function buildGlobalResultsSnapshotContentUrl(
+  request: GlobalResultsSnapshotContentRequest,
+): string {
+  const params = new URLSearchParams();
+  params.set("source_course_id", request.sourceCourseId);
+  params.set("run_id", request.runId);
+  params.set("path", request.path);
+  return `${API_BASE_URL}/results-snapshot/content?${params.toString()}`;
+}
+
 export async function getResultsSnapshotContent(
   courseId: string,
   request: ResultsSnapshotContentRequest,
@@ -143,6 +169,18 @@ export async function getResultsSnapshotContent(
   });
   if (!response.ok) {
     throw new Error(`Failed to load results snapshot content: ${response.status}`);
+  }
+  return (await response.json()) as ArtifactContent;
+}
+
+export async function getGlobalResultsSnapshotContent(
+  request: GlobalResultsSnapshotContentRequest,
+): Promise<ArtifactContent> {
+  const response = await fetch(buildGlobalResultsSnapshotContentUrl(request), {
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load global results snapshot content: ${response.status}`);
   }
   return (await response.json()) as ArtifactContent;
 }

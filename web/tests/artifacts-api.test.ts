@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildExportUrl, buildResultsSnapshotContentUrl } from "../lib/api/artifacts.ts";
+import {
+  buildExportUrl,
+  buildGlobalResultsSnapshotContentUrl,
+  buildResultsSnapshotContentUrl,
+} from "../lib/api/artifacts.ts";
 import type { RunSession } from "../lib/api/runs.ts";
 
 test("buildExportUrl appends a cache-bust token when provided", () => {
@@ -37,6 +41,17 @@ test("buildResultsSnapshotContentUrl encodes source course, run id, and path", (
       path: "chapters/chapter-02/notebooklm/01-精讲.md",
     }),
     "http://127.0.0.1:8000/courses/database-course/results-snapshot/content?source_course_id=operating-systems-course&run_id=run-history-001&path=chapters%2Fchapter-02%2Fnotebooklm%2F01-%E7%B2%BE%E8%AE%B2.md",
+  );
+});
+
+test("buildGlobalResultsSnapshotContentUrl targets the course-agnostic snapshot endpoint", () => {
+  assert.equal(
+    buildGlobalResultsSnapshotContentUrl({
+      sourceCourseId: "operating-systems-course",
+      runId: "run-history-001",
+      path: "chapters/chapter-02/notebooklm/01-精讲.md",
+    }),
+    "http://127.0.0.1:8000/results-snapshot/content?source_course_id=operating-systems-course&run_id=run-history-001&path=chapters%2Fchapter-02%2Fnotebooklm%2F01-%E7%B2%BE%E8%AE%B2.md",
   );
 });
 

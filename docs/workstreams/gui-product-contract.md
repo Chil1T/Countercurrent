@@ -150,6 +150,7 @@ GUI 页面之间当前共享以下上下文标识：
 - `/courses/results` 不再使用独立产品空态页
 - 即使尚无当前课程快照，也应直接渲染结果工作台
 - 结果页主树当前以 `results-snapshot` 为事实源
+- 默认 `/courses/results` 必须能读取全局 snapshot 事实源，而不是要求 URL 先绑定 `course_id`
 - 主树只展示最终目标 `.md`
 - `intermediate/*.json`、`runtime/*`、`review_report.json` 不进入主树
 
@@ -162,6 +163,7 @@ GUI 页面之间当前共享以下上下文标识：
 
 - 过去课程产物：其他 `course_id` 的历史 run 快照
 - 当前课程产物：当前 `course_id` 下按 `run_id -> chapter_id -> notebooklm/*.md` 展示的最终产物
+- 默认 `/courses/results` 下的“当前课程”由后端按最新 run 时间选出，而不是由前端按随机 `run_id` 或目录名推断
 
 `runId` 规则：
 

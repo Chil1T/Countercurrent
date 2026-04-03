@@ -77,6 +77,7 @@ test("stitch v4 user-facing copy removes internal implementation wording", () =>
 
 test("stitch v4 results page keeps snapshot tree, preview, review summary, and export filters", () => {
   assert.match(resultsSource, /getResultsSnapshot/);
+  assert.match(resultsSource, /getGlobalResultsSnapshot/);
   assert.match(resultsSource, /getResultsSnapshotContent/);
   assert.match(resultsSource, /getCourseResultsContext/);
   assert.match(resultsSource, /getReviewSummary/);
@@ -84,6 +85,7 @@ test("stitch v4 results page keeps snapshot tree, preview, review summary, and e
   assert.match(resultsSource, /buildResultsSnapshotTree/);
   assert.match(resultsSource, /historical-courses/);
   assert.match(resultsSource, /current-course/);
+  assert.doesNotMatch(resultsSource, /current_course_id: courseId \?\? "unbound-course"/);
   assert.doesNotMatch(resultsSource, /intermediate/);
   assert.doesNotMatch(resultsSource, /runtime\/runtime_state\.json/);
 });

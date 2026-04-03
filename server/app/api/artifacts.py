@@ -37,6 +37,10 @@ def build_artifacts_router(service: ArtifactService) -> APIRouter:
     def get_results_snapshot(course_id: str):
         return service.list_results_snapshot(course_id)
 
+    @router.get("/results-snapshot")
+    def get_global_results_snapshot():
+        return service.list_global_results_snapshot()
+
     @router.get("/courses/{course_id}/results-snapshot/content")
     def get_results_snapshot_content(
         course_id: str,
@@ -46,6 +50,21 @@ def build_artifacts_router(service: ArtifactService) -> APIRouter:
     ):
         payload = service.read_results_snapshot_content(
             source_course_id=source_course_id or course_id,
+            run_id=run_id,
+            relative_path=path,
+        )
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Snapshot artifact not found")
+        return payload
+
+    @router.get("/results-snapshot/content")
+    def get_global_results_snapshot_content(
+        source_course_id: str = Query(...),
+        run_id: str = Query(...),
+        path: str = Query(...),
+    ):
+        payload = service.read_results_snapshot_content(
+            source_course_id=source_course_id,
             run_id=run_id,
             relative_path=path,
         )

@@ -480,7 +480,7 @@ out/_gui/frontend-dev.log
 - `runs` 已接通本地 `LocalProcessRunner`，通过 `runtime_state.json` 和 `course_blueprint.json` 映射阶段状态。
 - 运行页顶部的 `View` 只表示当前页面类型；真正的运行状态以“运行总状态”和阶段轨道为准。
 - 当前默认执行后端仍可设为 `heuristic`；只有当 GUI 默认值或课程覆盖显式切到 hosted provider，GUI 才会真正调用外部 AI 服务。
-- 配置页当前将“AI 服务配置”作为折叠区展示；课程级运行时覆盖编辑器继续从 GUI 隐藏，但已有历史草稿里的覆盖值仍会继续参与 runtime 解析。
+- 配置页当前将“AI 服务配置”作为独立信息区展示；课程级运行时覆盖编辑器继续从 GUI 隐藏，但已有历史草稿里的覆盖值仍会继续参与 runtime 解析。
 - 配置页的“启动 / 继续运行”遵循 CLI 的 resume 语义：同一 `course_id` 下已有且仍然有效的 checkpoint 会被复用，不默认强制全量重跑。
 - `resume` 会继续同一个 run 的冻结流水线身份；如果你修改了 provider/model/base_url/key/timeout，恢复时会读取新 routing；如果你修改了模板或 Review 策略，请创建新的 run。
 - 运行页已接入 `SSE` 事件流，并提供 `resume` / `clean` 控制动作。
@@ -503,7 +503,10 @@ out/_gui/frontend-dev.log
 - 两个过滤参数同时存在时，结果是“严格 completed chapter”与“最终产物目录”的交集。
 - 结果页文件树已支持渲染按课程级最新 context 获取的章节状态（pending/running/failed/completed/export_ready），同时当 URL 中带有特定 runId 时会通过 badge 提示当前是 Scoped view。
 - 结果页文件树在 `SSE` 自动刷新时会保持当前的展开与选中状态，不再盲目展开新节点。
-- 结果页当前主树来自 `GET /courses/{course_id}/results-snapshot`，只展示最终目标 `.md`；中间 JSON、runtime 和 review 文件不再进入主树。
+- 结果页当前主树来自 snapshot 只读接口：
+  - `GET /results-snapshot`：默认 `/courses/results` 工作台使用；后端会按最新 run 时间选择当前课程，并返回其他课程的历史快照
+  - `GET /courses/{course_id}/results-snapshot`：显式绑定课程的结果页使用
+  - 主树只展示最终目标 `.md`；中间 JSON、runtime 和 review 文件不再进入主树。
 - 结果页主树当前按“过去课程产物 / 当前课程产物”分区：
   - 过去课程产物：其他 `course_id` 的历史 run 快照
   - 当前课程产物：当前 `course_id` 下按 `run_id -> chapter_id -> notebooklm/*.md` 展示的最终产物

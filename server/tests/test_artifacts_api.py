@@ -97,6 +97,67 @@ class ArtifactsApiTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
+    def _write_run_record(
+        self,
+        *,
+        run_id: str,
+        course_id: str,
+        created_at: str,
+        run_kind: str = "chapter",
+    ) -> None:
+        run_dir = self.output_root / "_gui" / "runs" / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "session.json").write_text(
+            json.dumps(
+                {
+                    "id": run_id,
+                    "draft_id": f"draft-{course_id}",
+                    "course_id": course_id,
+                    "created_at": created_at,
+                    "status": "completed",
+                    "run_kind": run_kind,
+                    "backend": "heuristic",
+                    "hosted": False,
+                    "base_url": None,
+                    "simple_model": None,
+                    "complex_model": None,
+                    "timeout_seconds": None,
+                    "target_output": "interview_knowledge_base",
+                    "review_enabled": False,
+                    "review_mode": None,
+                    "stages": [],
+                    "chapter_progress": [],
+                    "snapshot_complete": True,
+                    "last_error": None,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+    def _write_snapshot_file(
+        self,
+        *,
+        course_id: str,
+        run_id: str,
+        chapter_id: str,
+        filename: str,
+        content: str,
+    ) -> None:
+        snapshot_dir = (
+            self.output_root
+            / "_gui"
+            / "results-snapshots"
+            / course_id
+            / run_id
+            / "chapters"
+            / chapter_id
+            / "notebooklm"
+        )
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        (snapshot_dir / filename).write_text(content, encoding="utf-8")
+
     def test_artifact_tree_lists_runtime_files(self) -> None:
         response = self.client.get(f"/courses/{self.course_id}/artifacts/tree")
 
@@ -174,6 +235,84 @@ class ArtifactsApiTests(unittest.TestCase):
         self.assertEqual(payload["report_count"], 1)
         self.assertEqual(payload["issue_count"], 1)
         self.assertEqual(payload["reports"][0]["issues"][0]["severity"], "medium")
+
+    def test_global_results_snapshot_selects_latest_course_and_orders_runs_by_created_at(self) -> None:
+        self._write_run_record(
+            run_id="run-alpha-older",
+            course_id="course-alpha",
+            created_at="2026-04-02T08:00:00+00:00",
+        )
+        self._write_run_record(
+            run_id="run-alpha-newer",
+            course_id="course-alpha",
+            created_at="2026-04-02T10:00:00+00:00",
+        )
+        self._write_run_record(
+            run_id="run-beta-latest",
+            course_id="course-beta",
+            created_at="2026-04-02T12:00:00+00:00",
+        )
+        self._write_snapshot_file(
+            course_id="course-alpha",
+            run_id="run-alpha-older",
+            chapter_id="chapter-01",
+            filename="01-alpha-old.md",
+            content="# Alpha old",
+        )
+        self._write_snapshot_file(
+            course_id="course-alpha",
+            run_id="run-alpha-newer",
+            chapter_id="chapter-01",
+            filename="01-alpha-new.md",
+            content="# Alpha new",
+        )
+        self._write_snapshot_file(
+            course_id="course-beta",
+            run_id="run-beta-latest",
+            chapter_id="chapter-01",
+            filename="01-beta-latest.md",
+            content="# Beta latest",
+        )
+
+        response = self.client.get("/results-snapshot")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["current_course_id"], "course-beta")
+        self.assertEqual([run["run_id"] for run in payload["current_course_runs"]], ["run-beta-latest"])
+        self.assertEqual([course["course_id"] for course in payload["historical_courses"]], ["course-alpha"])
+        self.assertEqual(
+            [run["run_id"] for run in payload["historical_courses"][0]["runs"]],
+            ["run-alpha-newer", "run-alpha-older"],
+        )
+
+    def test_global_results_snapshot_content_reads_historical_course_markdown(self) -> None:
+        self._write_run_record(
+            run_id="run-history-001",
+            course_id="course-history",
+            created_at="2026-04-01T08:00:00+00:00",
+        )
+        self._write_snapshot_file(
+            course_id="course-history",
+            run_id="run-history-001",
+            chapter_id="chapter-02",
+            filename="01-history.md",
+            content="# History course",
+        )
+
+        response = self.client.get(
+            "/results-snapshot/content",
+            params={
+                "source_course_id": "course-history",
+                "run_id": "run-history-001",
+                "path": "chapters/chapter-02/notebooklm/01-history.md",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["path"], "chapters/chapter-02/notebooklm/01-history.md")
+        self.assertIn("History course", payload["content"])
 
     def test_export_zip_streams_course_bundle(self) -> None:
         response = self.client.get(f"/courses/{self.course_id}/export")
