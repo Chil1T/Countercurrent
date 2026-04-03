@@ -154,6 +154,47 @@ class RunsApiTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def _write_run_record(
+        self,
+        *,
+        run_id: str,
+        draft_id: str,
+        course_id: str,
+        status: str = "completed",
+        created_at: str | None = None,
+    ) -> None:
+        run_dir = self.output_root / "_gui" / "runs" / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "session": {
+                "id": run_id,
+                "draft_id": draft_id,
+                "course_id": course_id,
+                "created_at": created_at,
+                "status": status,
+                "run_kind": "chapter",
+                "backend": "heuristic",
+                "hosted": False,
+                "base_url": None,
+                "simple_model": None,
+                "complex_model": None,
+                "timeout_seconds": None,
+                "target_output": "interview_knowledge_base",
+                "review_enabled": False,
+                "review_mode": None,
+                "stages": [],
+                "chapter_progress": [],
+                "snapshot_complete": False,
+                "last_error": None,
+            },
+            "last_command": "run-course",
+            "auto_resume_attempt_count": 0,
+        }
+        (run_dir / "session.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
     def test_create_run_returns_conflict_when_draft_is_not_runtime_ready(self) -> None:
         draft_id = self.client.post(
             "/course-drafts",
@@ -2130,6 +2171,37 @@ class RunsApiTests(unittest.TestCase):
         self.assertEqual(payload["course_id"], course_id)
         self.assertIsNotNone(payload.get("latest_run"))
         self.assertEqual(payload["latest_run"]["id"], second_run_id)
+        self.assertEqual(payload["latest_run"]["status"], "running")
+
+    def test_get_course_results_context_uses_stable_fallback_for_legacy_runs_without_created_at(self) -> None:
+        course_id = build_course_id("Computer Networks")
+        self._write_run_record(
+            run_id="run-0001",
+            draft_id="draft-legacy-1",
+            course_id=course_id,
+            status="completed",
+            created_at=None,
+        )
+        self._write_run_record(
+            run_id="run-0002",
+            draft_id="draft-legacy-2",
+            course_id=course_id,
+            status="running",
+            created_at=None,
+        )
+        self.runner.snapshots["run-0001"] = {"status": "completed", "last_error": None}
+        self.runner.snapshots["run-0002"] = {"status": "running", "last_error": None}
+
+        historical_response = self.client.get("/runs/run-0001")
+        self.assertEqual(historical_response.status_code, 200)
+
+        response = self.client.get(f"/courses/{course_id}/results-context")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["course_id"], course_id)
+        self.assertIsNotNone(payload.get("latest_run"))
+        self.assertEqual(payload["latest_run"]["id"], "run-0002")
         self.assertEqual(payload["latest_run"]["status"], "running")
 
     def test_get_course_results_context_returns_empty_when_no_chapter_run(self) -> None:

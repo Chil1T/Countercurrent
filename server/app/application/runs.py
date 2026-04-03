@@ -228,9 +228,6 @@ class RunService:
                 return (datetime.fromisoformat(created_at).timestamp(), record.session.id)
             except ValueError:
                 pass
-        path = self._record_path(record.session.id)
-        if path.exists():
-            return (path.stat().st_mtime, record.session.id)
         return (0.0, record.session.id)
 
     def _refresh_run_record(self, record: _RunRecord, *, allow_auto_resume: bool) -> RunSession:

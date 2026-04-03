@@ -275,6 +275,73 @@ class ProviderPolicyTests(unittest.TestCase):
                 1,
             )
 
+    def test_provider_limit_change_waits_for_active_permit_drain_instead_of_failing(self) -> None:
+        module = self._load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root_dir = Path(tmp)
+            registry_a = module.ProviderPermitRegistry(root_dir=root_dir, poll_interval_seconds=0.01)
+            registry_b = module.ProviderPermitRegistry(root_dir=root_dir, poll_interval_seconds=0.01)
+            high_policy = module.ProviderExecutionPolicy(
+                provider="stub",
+                max_concurrent_per_run=1,
+                max_concurrent_global=2,
+                transient_http_statuses=(),
+                max_call_attempts=1,
+                max_resume_attempts=1,
+            )
+            low_policy = module.ProviderExecutionPolicy(
+                provider="stub",
+                max_concurrent_per_run=1,
+                max_concurrent_global=1,
+                transient_http_statuses=(),
+                max_call_attempts=1,
+                max_resume_attempts=1,
+            )
+            first_entered = threading.Event()
+            allow_first_release = threading.Event()
+            second_entered = threading.Event()
+            allow_second_release = threading.Event()
+            errors: list[Exception] = []
+
+            def run_first() -> None:
+                try:
+                    with registry_a.acquire(high_policy):
+                        first_entered.set()
+                        allow_first_release.wait(timeout=2)
+                except Exception as error:
+                    errors.append(error)
+
+            def run_second() -> None:
+                try:
+                    with registry_b.acquire(low_policy):
+                        second_entered.set()
+                        allow_second_release.wait(timeout=2)
+                except Exception as error:
+                    errors.append(error)
+
+            first_thread = threading.Thread(target=run_first, daemon=True)
+            second_thread = threading.Thread(target=run_second, daemon=True)
+            first_thread.start()
+            self.assertTrue(first_entered.wait(timeout=1))
+            second_thread.start()
+            self.assertFalse(
+                second_entered.wait(timeout=0.2),
+                "lower global limit should wait for active permits to drain",
+            )
+
+            allow_first_release.set()
+            first_thread.join(timeout=2)
+            self.assertFalse(first_thread.is_alive())
+            self.assertTrue(second_entered.wait(timeout=1))
+            allow_second_release.set()
+            second_thread.join(timeout=2)
+            self.assertFalse(second_thread.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual(
+                json.loads((root_dir / "stub" / "limit.json").read_text(encoding="utf-8"))["max_concurrent_global"],
+                1,
+            )
+
     def test_same_pid_with_different_process_start_time_is_treated_as_stale(self) -> None:
         module = self._load_module()
         owner_payload = {

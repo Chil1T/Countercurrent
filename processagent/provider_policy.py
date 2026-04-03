@@ -138,6 +138,8 @@ class ProviderPermitRegistry:
                 stale_owner_grace_seconds=self.stale_owner_grace_seconds,
             ):
                 configured_limit = self._ensure_provider_limit(provider_dir, policy)
+                if configured_limit is None:
+                    continue
                 for slot_index in range(configured_limit):
                     slot_dir = provider_dir / f"slot-{slot_index:02d}"
                     if try_acquire_owned_directory(
@@ -151,7 +153,7 @@ class ProviderPermitRegistry:
     def _release_slot(self, slot_dir: Path) -> None:
         release_owned_directory(slot_dir)
 
-    def _ensure_provider_limit(self, provider_dir: Path, policy: ProviderExecutionPolicy) -> int:
+    def _ensure_provider_limit(self, provider_dir: Path, policy: ProviderExecutionPolicy) -> int | None:
         provider_dir.mkdir(parents=True, exist_ok=True)
         limit_path = provider_dir / "limit.json"
         requested_limit = policy.max_concurrent_global
@@ -165,10 +167,7 @@ class ProviderPermitRegistry:
                     "provider global concurrency limit is unreadable while permits are active: "
                     f"{policy.provider}"
                 )
-            raise RuntimeError(
-                "provider global concurrency limit cannot change while permits are active: "
-                f"{policy.provider} {current_limit} -> {requested_limit}"
-            )
+            return None
         _write_json_atomically(limit_path, {"max_concurrent_global": requested_limit})
         return requested_limit
 
