@@ -211,6 +211,9 @@ class ArtifactService:
         run_dir = self._snapshot_run_dir(course_id, run_id).resolve()
         if not run_dir.exists():
             return None
+        snapshot_root = self._results_snapshot_root.resolve()
+        if run_dir == snapshot_root or snapshot_root not in run_dir.parents:
+            return None
         target = (run_dir / relative_path).resolve()
         if target == run_dir or run_dir not in target.parents:
             return None
@@ -267,7 +270,10 @@ class ArtifactService:
         if session_path.exists():
             try:
                 payload = json.loads(session_path.read_text(encoding="utf-8"))
-                created_at = payload.get("created_at")
+                session_payload = payload.get("session") if isinstance(payload, dict) else None
+                if not isinstance(session_payload, dict):
+                    session_payload = payload if isinstance(payload, dict) else {}
+                created_at = session_payload.get("created_at")
                 if isinstance(created_at, str):
                     return (datetime.fromisoformat(created_at).timestamp(), run_id)
             except (OSError, json.JSONDecodeError, ValueError):

@@ -110,25 +110,29 @@ class ArtifactsApiTests(unittest.TestCase):
         (run_dir / "session.json").write_text(
             json.dumps(
                 {
-                    "id": run_id,
-                    "draft_id": f"draft-{course_id}",
-                    "course_id": course_id,
-                    "created_at": created_at,
-                    "status": "completed",
-                    "run_kind": run_kind,
-                    "backend": "heuristic",
-                    "hosted": False,
-                    "base_url": None,
-                    "simple_model": None,
-                    "complex_model": None,
-                    "timeout_seconds": None,
-                    "target_output": "interview_knowledge_base",
-                    "review_enabled": False,
-                    "review_mode": None,
-                    "stages": [],
-                    "chapter_progress": [],
-                    "snapshot_complete": True,
-                    "last_error": None,
+                    "session": {
+                        "id": run_id,
+                        "draft_id": f"draft-{course_id}",
+                        "course_id": course_id,
+                        "created_at": created_at,
+                        "status": "completed",
+                        "run_kind": run_kind,
+                        "backend": "heuristic",
+                        "hosted": False,
+                        "base_url": None,
+                        "simple_model": None,
+                        "complex_model": None,
+                        "timeout_seconds": None,
+                        "target_output": "interview_knowledge_base",
+                        "review_enabled": False,
+                        "review_mode": None,
+                        "stages": [],
+                        "chapter_progress": [],
+                        "snapshot_complete": True,
+                        "last_error": None,
+                    },
+                    "last_command": None,
+                    "auto_resume_attempt_count": 0,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -313,6 +317,90 @@ class ArtifactsApiTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["path"], "chapters/chapter-02/notebooklm/01-history.md")
         self.assertIn("History course", payload["content"])
+
+    def test_global_results_snapshot_content_rejects_snapshot_root_traversal(self) -> None:
+        escape_root = self.output_root / "_gui" / "escape-course" / "escape-run"
+        escape_root.mkdir(parents=True, exist_ok=True)
+        secret_path = escape_root / "escaped.md"
+        secret_path.write_text("top-secret", encoding="utf-8")
+
+        response = self.client.get(
+            "/results-snapshot/content",
+            params={
+                "source_course_id": "..\\escape-course",
+                "run_id": "escape-run",
+                "path": "escaped.md",
+            },
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_global_results_snapshot_orders_runs_by_nested_session_created_at(self) -> None:
+        self._write_run_record(
+            run_id="run-current-latest",
+            course_id="course-current",
+            created_at="2026-04-01T12:00:00+00:00",
+        )
+        self._write_run_record(
+            run_id="run-history-older",
+            course_id="course-history",
+            created_at="2026-04-01T08:00:00+00:00",
+        )
+        self._write_run_record(
+            run_id="run-history-newer",
+            course_id="course-history",
+            created_at="2026-04-01T10:00:00+00:00",
+        )
+        self._write_snapshot_file(
+            course_id="course-current",
+            run_id="run-current-latest",
+            chapter_id="chapter-01",
+            filename="01-current.md",
+            content="# current",
+        )
+        self._write_snapshot_file(
+            course_id="course-history",
+            run_id="run-history-older",
+            chapter_id="chapter-01",
+            filename="01-older.md",
+            content="# older",
+        )
+        self._write_snapshot_file(
+            course_id="course-history",
+            run_id="run-history-newer",
+            chapter_id="chapter-01",
+            filename="01-newer.md",
+            content="# newer",
+        )
+        older_snapshot = (
+            self.output_root
+            / "_gui"
+            / "results-snapshots"
+            / "course-history"
+            / "run-history-older"
+        )
+        newer_snapshot = (
+            self.output_root
+            / "_gui"
+            / "results-snapshots"
+            / "course-history"
+            / "run-history-newer"
+        )
+        older_snapshot.touch()
+        newer_snapshot.touch()
+        # Simulate a rewritten older snapshot directory whose filesystem mtime is newer
+        older_snapshot.touch()
+
+        response = self.client.get("/results-snapshot")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["current_course_id"], "course-current")
+        historical = next(course for course in payload["historical_courses"] if course["course_id"] == "course-history")
+        self.assertEqual(
+            [run["run_id"] for run in historical["runs"]],
+            ["run-history-newer", "run-history-older"],
+        )
 
     def test_export_zip_streams_course_bundle(self) -> None:
         response = self.client.get(f"/courses/{self.course_id}/export")
